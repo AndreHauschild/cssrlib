@@ -379,6 +379,10 @@ class peph:
             dt_rel = - 2.0*(rs[0:3]@rs[3:6])/(rCST.CLIGHT**2)
             dts[0] = dtss[0] + dt_rel
             dts[1] = (dtst[0]-dtss[0])/tt
+        elif dtss[0] == 0.0:
+            dt_rel = - 2.0*(rs[0:3]@rs[3:6])/(rCST.CLIGHT**2)
+            dts[0] = dtss[0] + dt_rel
+            dts[1] = 0.0
         else:
             dts = dtss
 
