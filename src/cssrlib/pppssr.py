@@ -840,13 +840,25 @@ class pppos():
                         # measurement variance
                         Rj[nv] = self.varerr(self.nav, el[j], f)
 
-                    if self.nav.monlevel > 1:
+                    # Screen for excessive residuals
+                    #
+                    if abs(v[nv]) > 1000:
+
+                        if f < nf:
+
+                            self.nav.vsat[sat[i]-1, f] = 0
+                            self.nav.vsat[sat[j]-1, f] = 0
+                            self.nav.outc[sat[i]-1, f] = self.nav.maxout
+                            self.nav.outc[sat[j]-1, f] = self.nav.maxout
+
                         self.nav.fout.write(
-                            "{} {}-{} res {} ({:3d}) {:10.3f} sig_i {:10.3f} sig_j {:10.3f}\n"
+                            "{} {}-{} res {} ({:3d}) {:13.3f} sig_i {:10.3f} sig_j {:10.3f}\n"
                             .format(time2str(obs.t),
                                     sat2id(sat[i]), sat2id(sat[j]), sig,
                                     nv, v[nv],
                                     np.sqrt(Ri[nv]), np.sqrt(Rj[nv])))
+
+                        continue
 
                     nb[b] += 1  # counter for single-differences per signal
                     nv += 1  # counter for single-difference observations
