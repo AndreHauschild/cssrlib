@@ -634,7 +634,7 @@ class pppos():
 
         return y, e, el
 
-    def sdres(self, obs, x, y, e, sat, el):
+    def sdres(self, obs, x, y, e, sat, el, rout=True):
         """
         SD phase/code residuals
 
@@ -653,6 +653,8 @@ class pppos():
             List of satellites
         el  : np.array of float values
             Elevation angles
+        rout: bool
+            Disable/Enable residual output
 
         Returns
         -------
@@ -678,6 +680,11 @@ class pppos():
 
         H = np.zeros((ns*nf*2, self.nav.nx))
         v = np.zeros(ns*nf*2)
+
+        # Reset residuals
+        #
+        self.nav.resc.fill(np.nan)
+        self.nav.resp.fill(np.nan)
 
         # Geodetic position
         #
@@ -859,6 +866,14 @@ class pppos():
                                     np.sqrt(Ri[nv]), np.sqrt(Rj[nv])))
 
                         continue
+
+                    # Store residuals
+                    #
+                    if rout:
+                        if f < nf:
+                            self.nav.resp[sat[j]-1, f % 2] = v[nv]
+                        else:
+                            self.nav.resc[sat[j]-1, f % 2] = v[nv]
 
                     nb[b] += 1  # counter for single-differences per signal
                     nv += 1  # counter for single-difference observations
@@ -1205,7 +1220,7 @@ class pppos():
 
         # SD residuals
         #
-        v, H, R = self.sdres(obs, xp, y, e, sat, el)
+        v, H, R = self.sdres(obs, xp, y, e, sat, el, False)
         Pp = self.nav.P.copy()
 
         # Kalman filter measurement update

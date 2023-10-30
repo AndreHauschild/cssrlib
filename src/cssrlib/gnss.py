@@ -745,6 +745,10 @@ class Nav():
         # Carrier-phase processed indicator
         self.vsat = np.zeros((uGNSS.MAXSAT, self.nf), dtype=int)
 
+        # Residuals
+        self.resc = np.ones((uGNSS.MAXSAT, self.nf), dtype=float)*np.nan
+        self.resp = np.ones((uGNSS.MAXSAT, self.nf), dtype=float)*np.nan
+
         self.tt = 0
         self.t = gtime_t()
 
