@@ -79,7 +79,12 @@ class pppos():
         self.nav.sig_qztd = 0.1/np.sqrt(3600)      # [m/sqrt(s)]
         self.nav.sig_qion = 10.0/np.sqrt(1)        # [m/s/sqrt(s)]
 
+        # Processing options
+        #
         self.nav.tidecorr = True
+        self.nav.useBiases = True
+        self.nav.useRxPco = True
+
         self.nav.thresar = 3.0  # AR acceptance threshold
         # 0:float-ppp,1:continuous,2:instantaneous,3:fix-and-hold
         self.nav.armode = 0
@@ -501,10 +506,14 @@ class pppos():
 
                 # Code and phase signal bias, converted from [ns] to [m]
                 #
-                cbias = np.array(
-                    [bsx.getosb(sat, obs.t, s)*ns2m for s in sigsPR])
-                pbias = np.array(
-                    [bsx.getosb(sat, obs.t, s)*ns2m for s in sigsCP])
+                if self.nav.useBiases:
+                    cbias = np.array(
+                        [bsx.getosb(sat, obs.t, s)*ns2m for s in sigsPR])
+                    pbias = np.array(
+                        [bsx.getosb(sat, obs.t, s)*ns2m for s in sigsCP])
+                else:
+                    cbias = np.array([0.0 for s in sigsPR])
+                    pbias = np.array([0.0 for s in sigsCP])
 
             else:  # from CSSR
 
@@ -590,15 +599,19 @@ class pppos():
 
             # Receiver/satellite antenna offset
             #
-            antrPR = antModelRx(self.nav, pos, e[i, :], sigsPR)
-            antrCP = antModelRx(self.nav, pos, e[i, :], sigsCP)
+            if self.nav.useRxPco:
+                antrPR = antModelRx(self.nav, pos, e[i, :], sigsPR)
+                antrCP = antModelRx(self.nav, pos, e[i, :], sigsCP)
+            else:
+                antrPR = np.array([0.0 for _ in sigsPR])
+                antrCP = np.array([0.0 for _ in sigsCP])
 
             if self.nav.ephopt == 4:
 
-                antsPR = antModelTx(
-                    self.nav, e[i, :], sigsPR, sat, obs.t, rs[i, :])
-                antsCP = antModelTx(
-                    self.nav, e[i, :], sigsCP, sat, obs.t, rs[i, :])
+                antsPR = antModelTx(self.nav, e[i, :], sigsPR,
+                                    sat, obs.t, rs[i, :])
+                antsCP = antModelTx(self.nav, e[i, :], sigsCP,
+                                    sat, obs.t, rs[i, :])
 
             elif cs is not None and (cs.cssrmode == sc.GAL_HAS_SIS or
                                      cs.cssrmode == sc.GAL_HAS_IDD or
@@ -1267,7 +1280,7 @@ class pppos():
                 # R <= Q=H'PH+R  chisq<max_inno[3] (0.5)
                 if self.valpos(v, R):
                     if self.nav.armode == 3:     # fix and hold
-                        self.holdamb(xa)    # hold fixed ambiguity
+                        self.holdamb(xa)         # hold fixed ambiguity
                     self.nav.smode = 4           # fix
 
         # Store epoch for solution
