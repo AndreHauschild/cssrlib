@@ -144,8 +144,8 @@ class peph:
                         self.cnt = 0
                         peph = peph_t(str2time(line, 3, 27))
                         # ep = time2epoch(peph.time)
-                        # print("{:4.0f}/{:02.0f}/{:02.0f} {:2.0f}:{:2.0f}:{:5.2f}"\
-                        #      .format(ep[0],ep[1],ep[2],ep[3],ep[4],ep[5]))
+                        # print("{:4.0f}/{:02.0f}/{:02.0f} {:2.0f}:{:2.0f}:{:5.2f}"
+                        #       .format(ep[0], ep[1], ep[2], ep[3], ep[4], ep[5]))
 
                         nline = self.nsat if self.flag == 'P' else self.nsat*2
                         for _ in range(nline):

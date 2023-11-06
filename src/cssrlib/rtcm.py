@@ -857,9 +857,8 @@ class rtcm(cssr):
                 sys_, _ = sat2prn(sat_)
                 self.fh.write(" {:s}\t".format(sat2id(sat_)))
                 for j, sig in enumerate(self.lc[0].cbias[sat_].keys()):
-                    sig_ = self.ssig2rsig(sys_, uTYP.C, sig)
                     self.fh.write(
-                        "{:s}\t{:5.2f}\t".format(sig_.str(),
+                        "{:s}\t{:5.2f}\t".format(sig.str(),
                                                  self.lc[0].cbias[sat_][sig]))
                 self.fh.write("\n")
 
@@ -870,9 +869,8 @@ class rtcm(cssr):
                 sys_, _ = sat2prn(sat_)
                 self.fh.write(" {:s}\t".format(sat2id(sat_)))
                 for j, sig in enumerate(self.lc[0].pbias[sat_].keys()):
-                    sig_ = self.ssig2rsig(sys_, uTYP.L, sig)
                     self.fh.write(
-                        "{:s}\t{:5.2f}\t".format(sig_.str(),
+                        "{:s}\t{:5.2f}\t".format(sig.str(),
                                                  self.lc[0].pbias[sat_][sig]))
                 self.fh.write("\n")
 
