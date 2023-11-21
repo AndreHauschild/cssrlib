@@ -94,6 +94,8 @@ class pppos():
         self.nav.elmaskar = np.deg2rad(20.0)  # elevation mask for AR
         self.nav.elmin = np.deg2rad(10.0)
 
+        self.nav.satmin = 5
+
         # Initial state vector
         #
         self.nav.x[0:3] = pos0
@@ -1198,6 +1200,7 @@ class pppos():
         # Skip empty epochs
         #
         if len(obs.sat) == 0:
+            print(" no observations")
             return
 
         # GNSS satellite positions, velocities and clock offsets
@@ -1205,8 +1208,8 @@ class pppos():
         #
         rs, vs, dts, svh, nsat = satposs(obs, self.nav, cs=cs, orb=orb)
 
-        if nsat < 6:
-            print(" too few satellites < 6: nsat={:d}".format(nsat))
+        if nsat < self.nav.satmin:
+            print(" too few satellites, nsat={:d}".format(nsat))
             return
 
         # Editing of observations
@@ -1247,7 +1250,7 @@ class pppos():
         # after editing
         #
         ny = y.shape[0]
-        if ny < 6:
+        if ny < self.nav.satmin:
             self.nav.P[np.diag_indices(3)] = 1.0
             self.nav.smode = 5
             return -1
@@ -1267,7 +1270,7 @@ class pppos():
         y = yu[iu, :]
         e = eu[iu, :]
         ny = y.shape[0]
-        if ny < 6:
+        if ny < self.nav.satmin:
             return -1
 
         # Residuals for float solution
