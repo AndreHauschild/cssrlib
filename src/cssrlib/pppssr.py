@@ -54,6 +54,7 @@ class pppos():
 
         self.nav.phw = np.zeros(uGNSS.MAXSAT)
         self.nav.el = np.zeros(uGNSS.MAXSAT)
+        self.nav.ns = 0
 
         # Parameters for PPP
         #
