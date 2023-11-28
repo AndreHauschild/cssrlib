@@ -85,6 +85,8 @@ class pppos():
         # Processing options
         #
         self.nav.tidecorr = uTideModel.IERS2010
+        # self.nav.tidecorr = uTideModel.SIMPLE
+        
         self.nav.useBiases = True
         self.nav.useRxPco = True
 
@@ -939,7 +941,7 @@ class pppos():
         S = H@PHt+R
         K = PHt@np.linalg.inv(S)
         x += K@v
-        #P = P - K@H@P
+        # P = P - K@H@P
         IKH = np.eye(P.shape[0])-K@H
         P = IKH@P@IKH.T + K@R@K.T  # Joseph stabilized version
 
