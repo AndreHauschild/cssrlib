@@ -4,7 +4,7 @@ module for standard PPP positioning
 
 import numpy as np
 
-from cssrlib.ephemeris import satposs
+from cssrlib.ephemeris import satposs, findeph
 from cssrlib.gnss import sat2id, sat2prn, rSigRnx, uTYP, uGNSS, rCST
 from cssrlib.gnss import uTropoModel, ecef2pos, tropmodel, geodist, satazel
 from cssrlib.gnss import time2str, timediff, gpst2utc, tropmapf
@@ -86,7 +86,7 @@ class pppos():
         #
         self.nav.tidecorr = uTideModel.IERS2010
         # self.nav.tidecorr = uTideModel.SIMPLE
-        
+
         self.nav.useBiases = True
         self.nav.useRxPco = True
 
@@ -523,6 +523,29 @@ class pppos():
                     cbias = np.array([0.0 for s in sigsPR])
                     pbias = np.array([0.0 for s in sigsCP])
 
+            elif self.nav.ephopt == 0:
+
+                eph = findeph(self.nav.eph, obs.t, sat)
+
+                for iSig, sig in enumerate(sigsPR):
+
+                    if sig == rSigRnx("GC1C"):
+                        cbias[iSig] = np.nan
+                        print("GPS C(A) ISC not supported!")
+                    elif sig == rSigRnx("GC1W"):
+                        cbias[iSig] = eph.tgd*_c
+                    elif sig == rSigRnx("GC2W"):
+                        cbias[iSig] = eph.tgd*_c*(77/60)**2
+                    elif sig == rSigRnx("EC1C") or sig == rSigRnx("EC1X"):
+                        pass
+                    elif sig == rSigRnx("EC5Q") or sig == rSigRnx("EC5X"):
+                        pass
+                    elif sig == rSigRnx("EC7Q") or sig == rSigRnx("EC7X"):
+                        cbias[iSig] = np.nan
+                        print("GAL E5b BGD not supported!")
+                    else:
+                        cbias[i] = np.nan
+
             else:  # from CSSR
 
                 if cs.lc[0].cstat & (1 << sCType.CBIAS) == (1 << sCType.CBIAS):
@@ -720,6 +743,7 @@ class pppos():
             #   second all pseudorange observations
             #
             for f in range(0, nf*2):
+
                 # Select satellites from one constellation only
                 #
                 idx = self.sysidx(sat, sys)
@@ -765,10 +789,9 @@ class pppos():
                         continue
 
                     # Skip invalid measurements
-                    # NOTE: this additional test is included here,
-                    #       since biases or antenna offsets may not be
-                    #       available and this zdres()
-                    #       returns zero observation residuals!
+                    # NOTE: this additional test is included here, since biases
+                    #       or antenna offsets may not be available and thus
+                    #       zdres() returns zero observation residuals!
                     #
                     if y[i, f] == 0.0 or y[j, f] == 0.0:
                         continue
@@ -788,10 +811,10 @@ class pppos():
 
                     # SD troposphere
                     #
-                    _, mapfwi = tropmapf(
-                        obs.t, pos, el[i], model=self.nav.trpModel)
-                    _, mapfwj = tropmapf(
-                        obs.t, pos, el[j], model=self.nav.trpModel)
+                    _, mapfwi = tropmapf(obs.t, pos, el[i],
+                                         model=self.nav.trpModel)
+                    _, mapfwj = tropmapf(obs.t, pos, el[j],
+                                         model=self.nav.trpModel)
 
                     idx_i = self.IT(self.nav.na)
                     H[nv, idx_i] = mapfwi - mapfwj

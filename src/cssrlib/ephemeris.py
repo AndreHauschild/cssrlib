@@ -410,7 +410,8 @@ def satposs(obs, nav, cs=None, orb=None):
 
                 nav.dorb[sat] = dorb_
                 nav.dclk[sat] = dclk
-                nsat += 1
+
+            nsat += 1
 
     if cs is not None:
         nav.time_p = cs.lc[0].t0[1]
