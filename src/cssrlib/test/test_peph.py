@@ -17,13 +17,20 @@ ep = [2021, 9, 22, 12, 0, 0]
 time = epoch2time(ep)
 doy = int(time2doy(time))
 
-bdir = '../../../../cssrlib-data/data/'
-orbfile = bdir+"COD0MGXFIN_{:4d}{:03d}0000_01D_05M_ORB.SP3".format(ep[0], doy)
-clkfile = bdir+"COD0MGXFIN_{:4d}{:03d}0000_01D_30S_CLK.CLK".format(ep[0], doy)
-dcbfile = bdir+"COD0MGXFIN_{:4d}{:03d}0000_01D_01D_OSB.BIA".format(ep[0], doy)
-atxfile = bdir+"igs14.atx"
+#bdir = '../../../../cssrlib-data/data/'
+#orbfile = bdir+"COD0MGXFIN_{:4d}{:03d}0000_01D_05M_ORB.SP3".format(ep[0], doy)
+#clkfile = bdir+"COD0MGXFIN_{:4d}{:03d}0000_01D_30S_CLK.CLK".format(ep[0], doy)
+#dcbfile = bdir+"COD0MGXFIN_{:4d}{:03d}0000_01D_01D_OSB.BIA".format(ep[0], doy)
+#atxfile = bdir+"igs14.atx"
 
-sat = id2sat("G01")
+ep = [2010, 3, 22, 0, 0, 0]
+time = epoch2time(ep)
+doy = int(time2doy(time))
+
+bdir = '/home/haus_an/Projects/PPP_Kepler/SIM_PHM/_sp3/'
+orbfile = bdir+"a0_est_VAL_Hopfi_MEO_CLK_READ_30s.sp3"
+
+sat = id2sat("E16")
 sig = rSigRnx("GC1C")
 
 if True:
@@ -36,7 +43,7 @@ if True:
     sp = peph()
 
     nav = sp.parse_sp3(orbfile, nav)
-    nav = rnx.decode_clk(clkfile, nav)
+    #nav = rnx.decode_clk(clkfile, nav)
 
     n = 10
     rs = np.zeros((1, 6))
@@ -52,6 +59,17 @@ if True:
               "{:15.4f} {:15.4f} {:15.4f} {:15.6f}"
               .format(ep[0], ep[1], ep[2], ep[3], ep[4], ep[5], sat2id(sat),
                       rs[0, 0], rs[0, 1], rs[0, 2], dts[0, 0]*1e6))
+
+        """
+        rst, dtst, _, _ = sp.pephpos(t, sat, nav)
+        #dtst, _ = sp.pephclk(t, sat, nav)
+
+        print("{:4d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}  {:s}  "
+              "{:15.4f} {:15.4f} {:15.4f} {:15.6f}"
+              .format(ep[0], ep[1], ep[2], ep[3], ep[4], ep[5], sat2id(sat),
+                      rst[0], rst[1], rst[2], dtst[0]*1e6))
+        """
+        print()
 
     print()
 
