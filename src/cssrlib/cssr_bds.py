@@ -19,6 +19,8 @@ class cssr_bds(cssr):
         self.nsig_max = 8
         self.iodp = -1
         self.iodp_p = -1
+        self.cb_blen = 12
+        self.cb_scl = 0.017
 
     def ssig2rsig(self, sys: sGNSS, utyp: uTYP, ssig):
         gps_tbl = {
@@ -173,13 +175,20 @@ class cssr_bds(cssr):
         self.iodssr = head['iodssr']
 
         self.lc[0].cstat |= (1 << sCType.MASK)
-        self.lc[0].t0[sCType.MASK] = self.time
+        # self.lc[0].t0[0][sCType.MASK] = self.time
         return i
 
     def decode_cssr_orb_sat(self, msg, i, inet, sat_n):
-        slot, iodn, iodc, dx, dy, dz, ucls, uval = \
-            bs.unpack_from('u9u10u3s15s13s13u3u3', msg, i)
-        i += 69
+        slot, iodn, iodc = bs.unpack_from('u9u10u3', msg, i)
+        i += 22
+
+        dx, dy, dz = bs.unpack_from('s{:d}s{:d}s{:d}'.format(
+            self.dorb_blen[0], self.dorb_blen[1], self.dorb_blen[2]), msg, i)
+        i += self.dorb_blen[0] + self.dorb_blen[1] + self.dorb_blen[2]
+
+        ucls, uval = bs.unpack_from('u3u3', msg, i)
+        i += 6
+
         sys, prn = self.slot2prn(slot)
         if sys == uGNSS.NONE:
             return i
@@ -191,14 +200,19 @@ class cssr_bds(cssr):
             iodn = iodn & 0xff  # IODC -> IODE
 
         dorb = np.zeros(3)
-        dorb[0] = self.sval(dx, 15, self.dorb_scl[0])
-        dorb[1] = self.sval(dy, 13, self.dorb_scl[1])
-        dorb[2] = self.sval(dz, 13, self.dorb_scl[2])
+        dorb[0] = self.sval(dx, self.dorb_blen[0], self.dorb_scl[0])
+        dorb[1] = self.sval(dy, self.dorb_blen[1], self.dorb_scl[1])
+        dorb[2] = self.sval(dz, self.dorb_blen[2], self.dorb_scl[2])
 
         self.lc[inet].iode[sat] = iodn
         self.lc[inet].iodc[sat] = iodc
         self.lc[inet].dorb[sat] = dorb
         self.ura[sat] = self.quality_idx(ucls, uval)
+
+        if sat not in self.lc[inet].t0:
+            self.lc[inet].t0[sat] = {}
+
+        self.lc[inet].t0[sat][sCType.ORBIT] = self.time
         return i
 
     def decode_cssr_orb(self, msg, i, inet=0):
@@ -214,8 +228,8 @@ class cssr_bds(cssr):
 
         self.iodssr_c[sCType.ORBIT] = head['iodssr']
         self.lc[inet].cstat |= (1 << sCType.ORBIT)
-        self.lc[inet].t0[sCType.ORBIT] = self.time
-        i += 19
+
+        i += 19  # reserve
         return i
 
     def decode_cssr_cbias(self, msg, i, inet=0):
@@ -237,22 +251,28 @@ class cssr_bds(cssr):
             sat = prn2sat(sys, prn)
             if sat not in sat_n:
                 continue
+            if sat not in self.lc[inet].t0:
+                self.lc[inet].t0[sat] = {}
+            self.lc[inet].t0[sat][sCType.CBIAS] = self.time
+
             self.lc[inet].cbias[sat] = {}
             for j in range(0, nsig):
-                sig, cb = bs.unpack_from('u4s12', msg, i)
-                i += 16
+                sig, cb = bs.unpack_from(
+                    'u4s{:d}'.format(self.cb_blen), msg, i)
+                i += 4+self.cb_blen
                 sig_ = self.ssig2rsig(sys, uTYP.C, sig)
-                self.lc[inet].cbias[sat][sig_] = self.sval(cb, 12, self.cb_scl)
+                self.lc[inet].cbias[sat][sig_] = self.sval(
+                    cb, self.cb_blen, self.cb_scl)
 
         self.iodssr_c[sCType.CBIAS] = head['iodssr']
         self.lc[inet].cstat |= (1 << sCType.CBIAS)
-        self.lc[inet].t0[sCType.CBIAS] = self.time
+
         return i
 
     def decode_cssr_clk_sat(self, msg, i, inet, sat):
         """ decode clock correction for satellite """
-        iodc, dclk = bs.unpack_from('u3s15', msg, i)
-        i += 18
+        iodc, dclk = bs.unpack_from('u3s{:d}'.format(self.dclk_blen), msg, i)
+        i += 3+self.dclk_blen
 
         if sat in self.lc[inet].iodc_c.keys() and \
                 iodc != self.lc[inet].iodc_c[sat]:
@@ -260,7 +280,8 @@ class cssr_bds(cssr):
             self.lc[inet].dclk_p[sat] = self.lc[inet].dclk[sat]
         self.lc[inet].iodc_c[sat] = iodc
         # note: the sign of the clock correction reversed
-        self.lc[inet].dclk[sat] = -self.sval(dclk, 15, self.dclk_scl)
+        self.lc[inet].dclk[sat] = - \
+            self.sval(dclk, self.dclk_blen, self.dclk_scl)
         return i
 
     def decode_cssr_clk(self, msg, i, inet=0):
@@ -279,10 +300,13 @@ class cssr_bds(cssr):
             if idx < self.nsat_n:
                 sat = self.sat_n[idx]
                 i = self.decode_cssr_clk_sat(msg, i, inet, sat)
+                if sat not in self.lc[inet].t0:
+                    self.lc[inet].t0[sat] = {}
+                self.lc[inet].t0[sat][sCType.CLOCK] = self.time
 
         self.iodssr_c[sCType.CLOCK] = head['iodssr']
         self.lc[inet].cstat |= (1 << sCType.CLOCK)
-        self.lc[inet].t0[sCType.CLOCK] = self.time
+
         i += 10
         return i
 
@@ -304,7 +328,7 @@ class cssr_bds(cssr):
                 self.ura[sat] = self.quality_idx(v['class'], v['val'])
 
         self.lc[0].cstat |= (1 << sCType.URA)
-        self.lc[0].t0[sCType.URA] = self.time
+        # self.lc[0].t0[0][sCType.URA] = self.time
         return i
 
     def decode_cssr_comb1(self, msg, i, inet=0):

@@ -253,6 +253,9 @@ class rnxdec:
                             self.mode_nav = 0
                         line = fnav.readline()
 
+                elif self.ver >= 3.0:  # RINEX 3.0.x
+                    self.mode_nav = 0
+
                 # Process ephemeris information
                 #
                 sys = char2sys(line[0])
@@ -346,10 +349,15 @@ class rnxdec:
 
                 line = fnav.readline()  # line #1
 
-                if self.mode_nav > 0:
-                    eph.Adot = self.flt(line, 0)
-                else:
+                if sys == uGNSS.GAL:
                     eph.iode = int(self.flt(line, 0))
+                    eph.iodc = eph.iode
+                else:
+                    if self.mode_nav > 0:
+                        eph.Adot = self.flt(line, 0)
+                    else:
+                        eph.iode = int(self.flt(line, 0))
+
                 eph.crs = self.flt(line, 1)
                 eph.deln = self.flt(line, 2)
                 eph.M0 = self.flt(line, 3)
@@ -375,7 +383,15 @@ class rnxdec:
 
                 line = fnav.readline()  # line #5
                 eph.idot = self.flt(line, 0)
-                if self.mode_nav > 0:
+
+                if sys == uGNSS.GAL or self.mode_nav == 0:
+                    eph.code = int(self.flt(line, 1))  # source for GAL
+                    eph.week = int(self.flt(line, 2))
+
+                    if sys == uGNSS.GAL and self.ver < 4.0:
+                        eph.mode = 1 if eph.code & 0x2 else 0
+
+                else:
                     eph.delnd = self.flt(line, 1)
                     if sys == uGNSS.BDS:
                         eph.sattype = int(self.flt(line, 2))
@@ -383,9 +399,6 @@ class rnxdec:
                     else:
                         eph.urai[0] = int(self.flt(line, 2))
                         eph.urai[1] = int(self.flt(line, 3))
-                else:
-                    eph.code = int(self.flt(line, 1))  # source for GAL
-                    eph.week = int(self.flt(line, 2))
 
                 line = fnav.readline()  # line #6
                 if sys == uGNSS.BDS and self.mode_nav > 0:
@@ -404,19 +417,17 @@ class rnxdec:
                             eph.urai[2] = int(self.flt(line, 3))
                     elif sys == uGNSS.GAL:
                         tgd_b = float(self.flt(line, 3))
-                        if (eph.code >> 9) & 1:
+                        if (eph.code >> 9) & 1:  # E5b,E1
+                            eph.tgd_b = eph.tgd
                             eph.tgd = tgd_b
-                        else:
-                            eph.iodc = int(self.flt(line, 3))
+                        else:  # E5a,E1
+                            eph.tgd_b = tgd_b
                     elif sys == uGNSS.BDS:
                         eph.tgd_b = float(self.flt(line, 3))  # tgd2 B2/B3
 
-                    # work-around for QZS with non-zero health since Nov/9/2023
-                    if sys == uGNSS.QZS and eph.svh > 0:
-                        if timediff(eph.toc, gpst2time(2287, 406800)) >= 0:
-                            # based on IS-QZSS-PNT-005
-                            if eph.svh == 1 or eph.svh == 16:
-                                eph.svh = 0
+                    if sys == uGNSS.QZS:
+                        eph.code = eph.svh & 0x11  # L1C/A:0x01 or L1C/B:0x10
+                        eph.svh = eph.svh & 0xEE   # mask L1C/A, L1C/B health
 
                 if self.mode_nav < 3:
                     line = fnav.readline()  # line #7
@@ -432,6 +443,9 @@ class rnxdec:
 
                             eph.tgd = float(self.flt(line, 2))    # tgd_B1Cp
                             eph.tgd_b = float(self.flt(line, 3))  # tgd_B2ap
+
+                    elif sys == uGNSS.GAL:
+                        tot = int(self.flt(line, 0))
 
                     else:
                         if self.mode_nav > 0 and sys != uGNSS.GAL:

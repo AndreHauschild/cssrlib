@@ -7,14 +7,13 @@ import numpy as np
 from cssrlib.ephemeris import satposs, findeph
 from cssrlib.gnss import sat2id, sat2prn, rSigRnx, uTYP, uGNSS, rCST
 from cssrlib.gnss import uTropoModel, ecef2pos, tropmodel, geodist, satazel
-from cssrlib.gnss import time2str, timediff, gpst2utc, tropmapf
+from cssrlib.gnss import time2str, timediff, gpst2utc, tropmapf, uIonoModel
 from cssrlib.ppp import tidedisp, tidedispIERS2010, uTideModel
 from cssrlib.ppp import shapiro, windupcorr
 from cssrlib.peph import antModelRx, antModelTx
 from cssrlib.cssrlib import sCType
 from cssrlib.cssrlib import sCSSRTYPE as sc
 from cssrlib.mlambda import mlambda
-from cssrlib.rtk import ddidx
 
 # format definition for logging
 fmt_ztd = "{}         ztd      ({:3d},{:3d}) {:10.3f} {:10.3f} {:10.3f}\n"
@@ -45,6 +44,10 @@ class pppos():
         #
         self.nav.trpModel = uTropoModel.SAAST
 
+        # Select iono model
+        #
+        self.nav.ionoModel = uIonoModel.KLOBUCHAR
+
         # 0: use trop-model, 1: estimate, 2: use cssr correction
         self.nav.trop_opt = trop_opt
 
@@ -53,6 +56,9 @@ class pppos():
 
         # 0: none, 1: full model, 2: local/regional model
         self.nav.phw_opt = phw_opt
+
+        # carrier smoothing
+        self.nav.csmooth = False
 
         # Position (+ optional velocity), zenith tropo delay and
         # slant ionospheric delay states
@@ -170,6 +176,7 @@ class pppos():
 
         # Logging level
         #
+        self.monlevel = 0
         self.nav.fout = None
         if logfile is None:
             self.nav.monlevel = 0
@@ -213,7 +220,7 @@ class pppos():
 
     def varerr(self, nav, el, f):
         """ variation of measurement """
-        s_el = np.sin(el) if el > np.deg2rad(0.1) else np.sin(np.deg2rad(0.1))
+        s_el = max(np.sin(el), 0.1*rCST.D2R)
         fact = nav.eratio[f-nav.nf] if f >= nav.nf else 1
         a = fact*nav.err[1]
         b = fact*nav.err[2]
@@ -319,7 +326,7 @@ class pppos():
                 if np.any(self.nav.edt[sat[i]-1, :] > 0):
                     continue
 
-                if self.nav.niono > 0:
+                if self.nav.nf > 1 and self.nav.niono > 0:
                     # Get dual-frequency pseudoranges for this constellation
                     #
                     sig1 = obs.sig[sys[i]][uTYP.C][0]
@@ -448,7 +455,7 @@ class pppos():
                 v[k] = sigc[sig.toAtt('X')]
         return v
 
-    def zdres(self, obs, cs, bsx, rs, vs, dts, rr):
+    def zdres(self, obs, cs, bsx, rs, vs, dts, rr, rtype=1):
         """ non-differential residual """
 
         _c = rCST.CLIGHT
@@ -569,7 +576,7 @@ class pppos():
                     else:
                         cbias[i] = np.nan
 
-            else:  # from CSSR
+            elif cs is not None:  # from CSSR
 
                 if cs.lc[0].cstat & (1 << sCType.CBIAS) == (1 << sCType.CBIAS):
                     cbias = self.find_bias(cs, sigsPR, sat)
@@ -636,8 +643,10 @@ class pppos():
                                                  rr_, self.nav.phw[sat-1],
                                                  full=phw_mode)
 
-            # cycle -> m
-            phw = lam*self.nav.phw[sat-1]
+                # cycle -> m
+                phw = lam*self.nav.phw[sat-1]
+            else:
+                phw = np.zeros(nf)
 
             # Select APC reference signals
             #
@@ -666,8 +675,8 @@ class pppos():
             # Receiver/satellite antenna offset
             #
             if self.nav.useRxPco:
-                antrPR = antModelRx(self.nav, pos, e[i, :], sigsPR)
-                antrCP = antModelRx(self.nav, pos, e[i, :], sigsCP)
+                antrPR = antModelRx(self.nav, pos, e[i, :], sigsPR, rtype)
+                antrCP = antModelRx(self.nav, pos, e[i, :], sigsCP, rtype)
             else:
                 antrPR = np.array([0.0 for _ in sigsPR])
                 antrCP = np.array([0.0 for _ in sigsCP])
@@ -748,6 +757,8 @@ class pppos():
         nf = self.nav.nf  # number of frequencies (or signals)
         ns = len(el)  # number of satellites
         nc = len(obs.sig.keys())  # number of constellations
+
+        mode = 1 if len(y) == ns else 0  # 0:DD,1:SD
 
         nb = np.zeros(2*nc*nf, dtype=int)
 
@@ -836,9 +847,12 @@ class pppos():
                     if i == j:
                         continue
 
-                    #  Single-difference measurement
-                    #
-                    v[nv] = y[i, f] - y[j, f]
+                    if mode == 0:  # DD
+                        v[nv] = (y[i, f]-y[i+ns, f])-(y[j, f]-y[j+ns, f])
+                    else:
+                        #  Single-difference measurement
+                        #
+                        v[nv] = y[i, f] - y[j, f]
 
                     # SD line-of-sight vectors
                     #
@@ -1033,12 +1047,51 @@ class pppos():
                     nv += 1
         return xa
 
+    def ddidx(self, nav, sat):
+        """ index for SD to DD transformation matrix D """
+        nb = 0
+        n = uGNSS.MAXSAT
+        na = nav.na
+        ix = np.zeros((n, 2), dtype=int)
+        nav.fix = np.zeros((n, nav.nf), dtype=int)
+        for m in range(uGNSS.GNSSMAX):
+            k = na
+            for f in range(nav.nf):
+                for i in range(k, k+n):
+                    sat_i = i-k+1
+                    sys, _ = sat2prn(sat_i)
+                    if (sys != m):
+                        continue
+                    if sat_i not in sat or nav.x[i] == 0.0 \
+                       or nav.vsat[sat_i-1, f] == 0:
+                        continue
+                    if nav.el[sat_i-1] >= nav.elmaskar:
+                        nav.fix[sat_i-1, f] = 2
+                        break
+                    else:
+                        nav.fix[sat_i-1, f] = 1
+                for j in range(k, k+n):
+                    sat_j = j-k+1
+                    sys, _ = sat2prn(sat_j)
+                    if (sys != m):
+                        continue
+                    if i == j or sat_j not in sat or nav.x[j] == 0.0 \
+                       or nav.vsat[sat_j-1, f] == 0:
+                        continue
+                    if nav.el[sat_j-1] >= nav.elmaskar:
+                        ix[nb, :] = [i, j]
+                        nb += 1
+                        nav.fix[sat_j-1, f] = 2
+                k += n
+        ix = np.resize(ix, (nb, 2))
+        return ix
+
     def resamb_lambda(self, sat):
         """ resolve integer ambiguity using LAMBDA method """
         nx = self.nav.nx
         na = self.nav.na
         xa = np.zeros(na)
-        ix = ddidx(self.nav, sat)
+        ix = self.ddidx(self.nav, sat)
         nb = len(ix)
         if nb <= 0:
             print("no valid DD")
@@ -1099,15 +1152,18 @@ class pppos():
                 self.nav.x, self.nav.P, H[0:nv, :], v[0:nv], R)
         return 0
 
-    def qcedit(self, obs, rs, dts, svh):
+    def qcedit(self, obs, rs, dts, svh, rr=None):
         """ Coarse quality control and editing of observations """
 
         # Predicted position at next epoch
         #
         tt = timediff(obs.t, self.nav.t)
-        rr_ = self.nav.x[0:3].copy()
-        if self.nav.pmode > 0:
-            rr_ += self.nav.x[3:6]*tt
+        if rr is None:
+            rr_ = self.nav.x[0:3].copy()
+            if self.nav.pmode > 0:
+                rr_ += self.nav.x[3:6]*tt
+        else:
+            rr_ = rr
 
         # Solid Earth tide corrections
         #
@@ -1257,9 +1313,14 @@ class pppos():
 
         return np.array(sat, dtype=int)
 
-    def process(self, obs, cs=None, orb=None, bsx=None):
+    def base_process(self, obs, obsb, rs, dts, svh):
+        """ processing for base station in RTK
+            (implemented in rtkpos) """
+        return None, None, None, None
+
+    def process(self, obs, cs=None, orb=None, bsx=None, obsb=None):
         """
-        PPP positioning
+        PPP/PPP-RTK/RTK positioning
         """
 
         # Skip empty epochs
@@ -1281,10 +1342,28 @@ class pppos():
         #
         sat_ed = self.qcedit(obs, rs, dts, svh)
 
+        if obsb is None:  # PPP/PPP-RTK
+            # Select satellites having passed quality control
+            #
+            # index of valid sats in obs.sat
+            iu = np.where(np.isin(obs.sat, sat_ed))[0]
+            ns = len(iu)
+            y = np.zeros((ns, self.nav.nf*2))
+            e = np.zeros((ns, 3))
+
+            obs_ = obs
+        else:  # RTK
+            y, e, iu, obs_ = self.base_process(obs, obsb, rs, dts, svh)
+            ns = len(iu)
+
+        if ns < 6:
+            print(" too few satellites < 6: ns={:d}".format(ns))
+            return
+
         # Kalman filter time propagation, initialization of ambiguities
         # and iono
         #
-        self.udstate(obs)
+        self.udstate(obs_)
 
         xa = np.zeros(self.nav.nx)
         xp = self.nav.x.copy()
@@ -1296,10 +1375,9 @@ class pppos():
         # Select satellites having passed quality control
         #
         # index of valid sats in obs.sat
-        iu = np.where(np.isin(obs.sat, sat_ed))[0]
         sat = obs.sat[iu]
-        y = yu[iu, :]
-        e = eu[iu, :]
+        y[:ns, :] = yu[iu, :]
+        e[:ns, :] = eu[iu, :]
         el = elu[iu]
 
         # Store reduced satellite list
