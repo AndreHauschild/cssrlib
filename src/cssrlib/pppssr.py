@@ -119,6 +119,7 @@ class pppos():
 
         self.nav.useBiases = True
         self.nav.useRxPco = True
+        self.nav.useTxPco = True
 
         self.nav.thresar = 3.0  # AR acceptance threshold
         # 0:float-ppp,1:continuous,2:instantaneous,3:fix-and-hold
@@ -672,7 +673,7 @@ class pppos():
                     elif sys == uGNSS.BDS:
                         sig0 = (rSigRnx("CC6I"),)
 
-            # Receiver/satellite antenna offset
+            # Receiver antenna offset
             #
             if self.nav.useRxPco:
                 antrPR = antModelRx(self.nav, pos, e[i, :], sigsPR, rtype)
@@ -681,7 +682,9 @@ class pppos():
                 antrPR = np.array([0.0 for _ in sigsPR])
                 antrCP = np.array([0.0 for _ in sigsCP])
 
-            if self.nav.ephopt == 4:
+            # Satellite antenna offset
+            #
+            if self.nav.ephopt == 4 and self.nav.useTxPco:
 
                 antsPR = antModelTx(self.nav, e[i, :], sigsPR,
                                     sat, obs.t, rs[i, :])
