@@ -1381,7 +1381,7 @@ def tropmapf(t, pos, el, model=uTropoModel.SAAST):
     elif model == uTropoModel.HOPF:
         return tropmapfHpf(el)
     else:
-        return 0
+        return 0, 0
 
 
 def tropmodel(t, pos, el=np.pi/2, humi=0.7, model=uTropoModel.SAAST):
@@ -1394,7 +1394,7 @@ def tropmodel(t, pos, el=np.pi/2, humi=0.7, model=uTropoModel.SAAST):
     elif model == uTropoModel.HOPF:
         return tropmodelHpf()
     else:
-        return 0
+        return 0, 0, None
 
 
 def meteo(hgt, humi):
