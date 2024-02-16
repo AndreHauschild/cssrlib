@@ -4,7 +4,7 @@ module for standard PPP positioning
 
 import numpy as np
 
-from cssrlib.ephemeris import satposs
+from cssrlib.ephemeris import satposs, findeph
 from cssrlib.gnss import sat2id, sat2prn, rSigRnx, uTYP, uGNSS, rCST
 from cssrlib.gnss import uTropoModel, ecef2pos, tropmodel, geodist, satazel
 from cssrlib.gnss import time2str, timediff, gpst2utc, tropmapf, uIonoModel
@@ -84,6 +84,7 @@ class pppos():
 
         self.nav.phw = np.zeros(uGNSS.MAXSAT)
         self.nav.el = np.zeros(uGNSS.MAXSAT)
+        self.nav.ns = 0
 
         # Parameters for PPP
         #
@@ -115,11 +116,17 @@ class pppos():
         #
         self.nav.tidecorr = uTideModel.IERS2010
         # self.nav.tidecorr = uTideModel.SIMPLE
+
+        self.nav.useBiases = True
+        self.nav.useRxPco = True
+
         self.nav.thresar = 3.0  # AR acceptance threshold
         # 0:float-ppp,1:continuous,2:instantaneous,3:fix-and-hold
         self.nav.armode = 0
         self.nav.elmaskar = np.deg2rad(20.0)  # elevation mask for AR
         self.nav.elmin = np.deg2rad(10.0)
+
+        self.nav.satmin = 5
 
         # Initial state vector
         #
@@ -537,10 +544,37 @@ class pppos():
 
                 # Code and phase signal bias, converted from [ns] to [m]
                 # note: IGS uses sign convention different with RTCM
-                cbias = np.array(
-                    [-bsx.getosb(sat, obs.t, s)*ns2m for s in sigsPR])
-                pbias = np.array(
-                    [-bsx.getosb(sat, obs.t, s)*ns2m for s in sigsCP])
+                if self.nav.useBiases:
+                    cbias = np.array(
+                        [-bsx.getosb(sat, obs.t, s)*ns2m for s in sigsPR])
+                    pbias = np.array(
+                        [-bsx.getosb(sat, obs.t, s)*ns2m for s in sigsCP])
+                else:
+                    cbias = np.array([0.0 for s in sigsPR])
+                    pbias = np.array([0.0 for s in sigsCP])
+
+            elif self.nav.ephopt == 0:
+
+                eph = findeph(self.nav.eph, obs.t, sat)
+
+                for iSig, sig in enumerate(sigsPR):
+
+                    if sig == rSigRnx("GC1C"):
+                        cbias[iSig] = np.nan
+                        print("GPS C(A) ISC not supported!")
+                    elif sig == rSigRnx("GC1W"):
+                        cbias[iSig] = eph.tgd*_c
+                    elif sig == rSigRnx("GC2W"):
+                        cbias[iSig] = eph.tgd*_c*(77/60)**2
+                    elif sig == rSigRnx("EC1C") or sig == rSigRnx("EC1X"):
+                        pass
+                    elif sig == rSigRnx("EC5Q") or sig == rSigRnx("EC5X"):
+                        pass
+                    elif sig == rSigRnx("EC7Q") or sig == rSigRnx("EC7X"):
+                        cbias[iSig] = np.nan
+                        print("GAL E5b BGD not supported!")
+                    else:
+                        cbias[i] = np.nan
 
             elif cs is not None:  # from CSSR
 
@@ -640,15 +674,19 @@ class pppos():
 
             # Receiver/satellite antenna offset
             #
-            antrPR = antModelRx(self.nav, pos, e[i, :], sigsPR, rtype)
-            antrCP = antModelRx(self.nav, pos, e[i, :], sigsCP, rtype)
+            if self.nav.useRxPco:
+                antrPR = antModelRx(self.nav, pos, e[i, :], sigsPR, rtype)
+                antrCP = antModelRx(self.nav, pos, e[i, :], sigsCP, rtype)
+            else:
+                antrPR = np.array([0.0 for _ in sigsPR])
+                antrCP = np.array([0.0 for _ in sigsCP])
 
             if self.nav.ephopt == 4:
 
-                antsPR = antModelTx(
-                    self.nav, e[i, :], sigsPR, sat, obs.t, rs[i, :])
-                antsCP = antModelTx(
-                    self.nav, e[i, :], sigsCP, sat, obs.t, rs[i, :])
+                antsPR = antModelTx(self.nav, e[i, :], sigsPR,
+                                    sat, obs.t, rs[i, :])
+                antsCP = antModelTx(self.nav, e[i, :], sigsCP,
+                                    sat, obs.t, rs[i, :])
 
             elif cs is not None and (cs.cssrmode == sc.GAL_HAS_SIS or
                                      cs.cssrmode == sc.GAL_HAS_IDD or
@@ -684,7 +722,7 @@ class pppos():
 
         return y, e, el
 
-    def sdres(self, obs, x, y, e, sat, el):
+    def sdres(self, obs, x, y, e, sat, el, rout=True):
         """
         SD phase/code residuals
 
@@ -703,6 +741,8 @@ class pppos():
             List of satellites
         el  : np.array of float values
             Elevation angles
+        rout: bool
+            Disable/Enable residual output
 
         Returns
         -------
@@ -731,6 +771,11 @@ class pppos():
         H = np.zeros((ns*nf*2, self.nav.nx))
         v = np.zeros(ns*nf*2)
 
+        # Reset residuals
+        #
+        self.nav.resc.fill(np.nan)
+        self.nav.resp.fill(np.nan)
+
         # Geodetic position
         #
         pos = ecef2pos(x[0:3])
@@ -744,6 +789,7 @@ class pppos():
             #   second all pseudorange observations
             #
             for f in range(0, nf*2):
+
                 # Select satellites from one constellation only
                 #
                 idx = self.sysidx(sat, sys)
@@ -789,10 +835,9 @@ class pppos():
                         continue
 
                     # Skip invalid measurements
-                    # NOTE: this additional test is included here,
-                    #       since biases or antenna offsets may not be
-                    #       available and this zdres()
-                    #       returns zero observation residuals!
+                    # NOTE: this additional test is included here, since biases
+                    #       or antenna offsets may not be available and thus
+                    #       zdres() returns zero observation residuals!
                     #
                     if y[i, f] == 0.0 or y[j, f] == 0.0:
                         continue
@@ -898,13 +943,33 @@ class pppos():
                         # measurement variance
                         Rj[nv] = self.varerr(self.nav, el[j], f)
 
-                    if self.nav.monlevel > 1:
+                    # Screen for excessive residuals
+                    #
+                    if abs(v[nv]) > 1000:
+
+                        if f < nf:
+
+                            self.nav.vsat[sat[i]-1, f] = 0
+                            self.nav.vsat[sat[j]-1, f] = 0
+                            self.nav.outc[sat[i]-1, f] = self.nav.maxout
+                            self.nav.outc[sat[j]-1, f] = self.nav.maxout
+
                         self.nav.fout.write(
                             fmt_res
                             .format(time2str(obs.t),
                                     sat2id(sat[i]), sat2id(sat[j]), sig,
                                     nv, v[nv],
                                     np.sqrt(Ri[nv]), np.sqrt(Rj[nv])))
+
+                        continue
+
+                    # Store residuals
+                    #
+                    if rout:
+                        if f < nf:
+                            self.nav.resp[sat[j]-1, f % 2] = v[nv]
+                        else:
+                            self.nav.resc[sat[j]-1, f % 2] = v[nv]
 
                     nb[b] += 1  # counter for single-differences per signal
                     nv += 1  # counter for single-difference observations
@@ -1261,6 +1326,7 @@ class pppos():
         # Skip empty epochs
         #
         if len(obs.sat) == 0:
+            print(" no observations")
             return
 
         # GNSS satellite positions, velocities and clock offsets
@@ -1268,8 +1334,8 @@ class pppos():
         #
         rs, vs, dts, svh, nsat = satposs(obs, self.nav, cs=cs, orb=orb)
 
-        if nsat < 6:
-            print(" too few satellites < 6: nsat={:d}".format(nsat))
+        if nsat < self.nav.satmin:
+            print(" too few satellites, nsat={:d}".format(nsat))
             return
 
         # Editing of observations
@@ -1327,14 +1393,14 @@ class pppos():
         # after editing
         #
         ny = y.shape[0]
-        if ny < 6:
+        if ny < self.nav.satmin:
             self.nav.P[np.diag_indices(3)] = 1.0
             self.nav.smode = 5
             return -1
 
         # SD residuals
         #
-        v, H, R = self.sdres(obs, xp, y, e, sat, el)
+        v, H, R = self.sdres(obs, xp, y, e, sat, el, False)
         Pp = self.nav.P.copy()
 
         # Kalman filter measurement update
@@ -1347,7 +1413,7 @@ class pppos():
         y = yu[iu, :]
         e = eu[iu, :]
         ny = y.shape[0]
-        if ny < 6:
+        if ny < self.nav.satmin:
             return -1
 
         # Residuals for float solution
@@ -1381,7 +1447,7 @@ class pppos():
                 # R <= Q=H'PH+R  chisq<max_inno[3] (0.5)
                 if self.valpos(v, R):
                     if self.nav.armode == 3:     # fix and hold
-                        self.holdamb(xa)    # hold fixed ambiguity
+                        self.holdamb(xa)         # hold fixed ambiguity
                     self.nav.smode = 4           # fix
 
         # Store epoch for solution
