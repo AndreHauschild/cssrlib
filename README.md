@@ -59,6 +59,14 @@ pip install .
 
 in the root directory, where the ``setup.cfg`` file is located.
 
+Altenatively, if you want to include the modules in your local repository from other python projects, you can add CSSRlib to your local pyhton path. Assuming that you have cloned the repository into your home directory, following lines should be added to the `.profile` file in your home directory:
+
+```
+if [ -d "$HOME/cssrlib/src" ] ; then
+    export PYTHONPATH="$HOME/cssrlib/src:$PYTHONPATH"
+fi
+```
+
 Testing
 =======
 
