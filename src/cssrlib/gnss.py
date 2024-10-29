@@ -781,6 +781,9 @@ class Nav():
         self.thresar = 3.0  # AR acceptance threshold
         self.elmaskar = np.deg2rad(20.0)  # elevation mask for AR
 
+        # Pivot satellite for between-satellite single differences
+        self.satPivot = {}
+
         # Select tropospheric model
         #
         self.trpModel = uTropoModel.SAAST

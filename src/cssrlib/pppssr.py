@@ -109,7 +109,7 @@ class pppos():
             self.nav.sig_qp = 0.01/np.sqrt(1)      # [m/sqrt(s)]
             self.nav.sig_qv = 1.0/np.sqrt(1)       # [m/s/sqrt(s)]
         self.nav.sig_qztd = 0.05/np.sqrt(3600)     # [m/sqrt(s)]
-        self.nav.sig_qion = 0.5/np.sqrt(1)        # [m/s/sqrt(s)]
+        self.nav.sig_qion = 10.0/np.sqrt(1)        # [m/s/sqrt(s)]
 
         # Processing options
         #
@@ -228,28 +228,29 @@ class pppos():
                 idx.append(k)
         return idx
 
-    def udstate(self, obs, rs):
+    def udstate(self, obs):
         """ time propagation of states and initialize """
 
         tt = timediff(obs.t, self.nav.t)
 
         ns = len(obs.sat)
-        el = np.zeros(ns)
-        e = np.zeros((ns, 3))
-
         sys = []
         sat = obs.sat
         for sat_i in obs.sat:
             sys_i, _ = sat2prn(sat_i)
             sys.append(sys_i)
 
-        # Predict position wiht velocity if estimated
+        # Predict position with velocity if estimated
         #
         nx = self.nav.nx
         Phi = np.eye(nx)
         if self.nav.pmode > 0:  # velocity is estimated
             self.nav.x[0:3] += self.nav.x[3:6]*tt
             Phi[0:3, 3:6] = np.eye(3)*tt
+
+        # Process noise increment
+        #
+        dQ = self.nav.q[0:self.nav.nq]*tt
 
         # Update Kalman filter state elements
         #
@@ -359,24 +360,12 @@ class pppos():
 
                 bias[i] = cp - pr/lam + 2.0*ion[i]/lam*(f1/fi)**2
 
-                # Global satellite index
-                #
-                j = sat[i]-1
-
-                # Geometric distance corrected for Earth rotation
-                # during flight time
-                #
-                pos = ecef2pos(self.nav.x[0:3])
-                _, el[i] = satazel(pos, geodist(rs[j, :], self.nav.x[0:3]))
-
                 """
                 amb = nav.x[IB(sat[i], f, nav.na)]
                 if amb != 0.0:
                     offset += bias[i] - amb
                     na += 1
                 """
-
-            !!! TODO: compute pivot satellite here for each constellation !!!
 
             """
             # Adjust phase-code coherency
@@ -388,50 +377,56 @@ class pppos():
                         nav.x[IB(i+1, f, nav.na)] += db
             """
 
-            !!! TODO: do not initialize a-priori corvariance for pivot satellites !!!
-
             # Initialize ambiguity and slant-iono delay
             #
             for i in range(ns):
 
                 sys_i, _ = sat2prn(sat[i])
+                satPiv = self.nav.satPivot[sys_i][0]
 
                 j = self.IB(sat[i], f, self.nav.na)
+                Phi[j, j] = 1 if ion[i] != 0 else 0                
                 if bias[i] != 0.0 and self.nav.x[j] == 0.0:
 
-                    self.initx(bias[i], self.nav.sig_n0**2, j)
+                    sigma = self.nav.sig_n0 if sat[i] != satPiv else 0
+                    self.initx(bias[i], sigma**2, j)
 
                     if self.nav.monlevel > 0:
                         sig = obs.sig[sys_i][uTYP.L][f]
                         self.nav.fout.write(
-                            "{}  {} - init  ambiguity  {} {:12.3f}\n"
+                            "{}  {} - init  ambiguity  {} {:12.3f} {:6.2f}\n"
                             .format(time2str(obs.t), sat2id(sat[i]),
-                                    sig, bias[i]))
+                                    sig, bias[i], sigma))
 
                 if self.nav.niono > 0:
                     j = self.II(sat[i], self.nav.na)
                     Phi[j, j] = 1 if ion[i] != 0 else 0
                     if ion[i] != 0 and self.nav.x[j] == 0.0:
 
-                        self.initx(ion[i], self.nav.sig_ion0**2, j)
+                        sigma = self.nav.sig_ion0**2 if sat[i] != satPiv else 0
+                        self.initx(ion[i], sigma**2, j)
 
                         if self.nav.monlevel > 0:
                             self.nav.fout.write(
-                                "{}  {} - init  ionosphere      {:12.3f}\n"
+                                "{}  {} - init  ionosphere      {:12.3f} {:6.2f}\n"
                                 .format(time2str(obs.t), sat2id(sat[i]),
-                                        ion[i]))
+                                        ion[i], sigma))
 
         # Covariance matrix prediction
         #
         self.nav.P[0:nx, 0:nx] = Phi@self.nav.P[0:nx, 0:nx]@Phi.T
 
-        !!! TODO: do not apply process noise for pivot satellites !!!
+        # Set process noise increment for iono delay of pivot satellite to zero
+        #
+        if self.nav.niono > 0:
+            for _, sat_i in self.nav.satPivot.items():
+                dQ[self.II(sat_i[0], self.nav.na)] = 0
 
-        # Process noise
+        # Add process noise increment
         #
         dP = np.diag(self.nav.P)
         dP.flags['WRITEABLE'] = True
-        dP[0:self.nav.nq] += self.nav.q[0:self.nav.nq]*tt
+        dP[0:self.nav.nq] += dQ
 
         return 0
 
@@ -791,9 +786,9 @@ class pppos():
             if len(idx) == 0:
                 continue
 
-            # Select reference satellite with highest elevation
+            # Get index of pivot satellite in sat list
             #
-            i = idx[np.argmax(el[idx])]
+            i = idx[np.where(self.nav.satPivot[sys][0] == sat[idx])[0][0]]
 
             # Loop over twice the number of frequencies
             #   first for all carrier-phase observations
@@ -1166,6 +1161,14 @@ class pppos():
         #
         self.nav.edt = np.zeros((ns, self.nav.nf), dtype=int)
 
+        # Clear pivot satellites of previous epoch
+        #
+        self.nav.satPivot = {}
+        for sat_i in obs.sat:
+            sys_i, _ = sat2prn(sat_i)
+            if sys_i not in self.nav.satPivot.keys():
+                self.nav.satPivot.update({sys_i: (None, np.deg2rad(-90))})
+
         # Loop over all satellites
         #
         sat = []
@@ -1281,12 +1284,17 @@ class pppos():
                                     obs.S[j, f]))
                     continue
 
-            # Store satellite which have passed all tests
+            # Skip satellite which have not passed all tests
             #
             if np.any(self.nav.edt[i, :] > 0):
                 continue
 
             sat.append(sat_i)
+
+            # Store satellite with highest elevation angle as pivot satellite
+            #
+            if self.nav.satPivot[sys_i][1] < el:
+                self.nav.satPivot.update({sys_i: (sat_i, el)})
 
         return np.array(sat, dtype=int)
 
@@ -1339,7 +1347,7 @@ class pppos():
         # Kalman filter time propagation, initialization of ambiguities
         # and iono
         #
-        self.udstate(obs_, rs)
+        self.udstate(obs_)
 
         xa = np.zeros(self.nav.nx)
         xp = self.nav.x.copy()
