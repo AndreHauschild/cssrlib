@@ -420,7 +420,8 @@ class pppos():
         #
         if self.nav.niono > 0:
             for _, sat_i in self.nav.satPivot.items():
-                dQ[self.II(sat_i[0], self.nav.na)] = 0
+                if sat_i[0]:
+                    dQ[self.II(sat_i[0], self.nav.na)] = 0
 
         # Add process noise increment
         #
