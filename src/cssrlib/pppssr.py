@@ -385,7 +385,7 @@ class pppos():
                 satPiv = self.nav.satPivot[sys_i][0]
 
                 j = self.IB(sat[i], f, self.nav.na)
-                Phi[j, j] = 1 if ion[i] != 0 else 0                
+                Phi[j, j] = 1 if bias[i] != 0 else 0
                 if bias[i] != 0.0 and self.nav.x[j] == 0.0:
 
                     sigma = self.nav.sig_n0 if sat[i] != satPiv else 0
