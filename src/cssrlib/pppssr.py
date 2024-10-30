@@ -383,7 +383,7 @@ class pppos():
             for i in range(ns):
 
                 sys_i, _ = sat2prn(sat[i])
-                satPiv = self.nav.satPivot[sys_i]
+                satPiv = self.nav.satPivot.get(sys_i, None)
 
                 j = self.IB(sat[i], f, self.nav.na)
                 Phi[j, j] = 1 if bias[i] != 0 else 0
