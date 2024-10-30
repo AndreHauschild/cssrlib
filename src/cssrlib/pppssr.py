@@ -383,7 +383,7 @@ class pppos():
             for i in range(ns):
 
                 sys_i, _ = sat2prn(sat[i])
-                satPiv = self.nav.satPivot[sys_i][0]
+                satPiv = self.nav.satPivot[sys_i]
 
                 j = self.IB(sat[i], f, self.nav.na)
                 Phi[j, j] = 1 if bias[i] != 0 else 0
@@ -421,8 +421,7 @@ class pppos():
         #
         if self.nav.niono > 0:
             for _, sat_i in self.nav.satPivot.items():
-                if sat_i[0]:
-                    dQ[self.II(sat_i[0], self.nav.na)] = 0
+                dQ[self.II(sat_i, self.nav.na)] = 0
 
         # Add process noise increment
         #
@@ -790,7 +789,7 @@ class pppos():
 
             # Get index of pivot satellite in sat list
             #
-            i = idx[np.where(self.nav.satPivot[sys][0] == sat[idx])[0][0]]
+            i = idx[np.where(self.nav.satPivot[sys] == sat[idx])[0][0]]
 
             # Loop over twice the number of frequencies
             #   first for all carrier-phase observations
@@ -1163,13 +1162,12 @@ class pppos():
         #
         self.nav.edt = np.zeros((ns, self.nav.nf), dtype=int)
 
-        # Clear pivot satellites of previous epoch
-        #
-        self.nav.satPivot = {}
+        sat = []
+        elv = []
+        sys = []
 
         # Loop over all satellites
         #
-        sat = []
         for i in range(ns):
 
             sat_i = i+1
@@ -1214,14 +1212,14 @@ class pppos():
             # Check elevation angle
             #
             _, e = geodist(rs[j, :], rr_)
-            _, el = satazel(pos, e)
-            if el < self.nav.elmin:
+            _, elv_i = satazel(pos, e)
+            if elv_i < self.nav.elmin:
                 self.nav.edt[i][:] = 1
                 if self.nav.monlevel > 0:
                     self.nav.fout.write(
                         "{}  {} - edit - low elevation {:5.1f} deg\n"
                         .format(time2str(obs.t), sat2id(sat_i),
-                                np.rad2deg(el)))
+                                np.rad2deg(elv_i)))
                 continue
 
             # Pseudorange, carrier-phase and C/N0 signals
@@ -1288,14 +1286,26 @@ class pppos():
                 continue
 
             sat.append(sat_i)
+            sys.append(sys_i)
+            elv.append(elv_i)
 
-            # Store satellite with highest elevation angle as pivot satellite
+        sat = np.array(sat, dtype=int)
+        sys = np.array(sys, dtype=int)
+        elv = np.array(elv, dtype=float)
+
+        self.nav.satPivot = {}
+        for sys_i in set(sys):
+
+            # Select satellites from one constellation only
             #
-            if sys_i not in self.nav.satPivot.keys() or \
-                    self.nav.satPivot[sys_i][1] < el:
-                self.nav.satPivot.update({sys_i: (sat_i, el)})
+            idx = np.where(sys_i == sys)[0]
 
-        return np.array(sat, dtype=int)
+            # Select reference satellite with highest elevation
+            #
+            i = idx[np.argmax(elv[idx])]
+            self.nav.satPivot.update({sys_i: sat[i]})
+
+        return sat
 
     def base_process(self, obs, obsb, rs, dts, svh):
         """ processing for base station in RTK
