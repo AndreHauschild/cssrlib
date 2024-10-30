@@ -5,7 +5,8 @@ module for standard PPP positioning
 import numpy as np
 
 from cssrlib.ephemeris import satposs
-from cssrlib.gnss import sat2id, id2sat, sat2prn, rSigRnx, uTYP, uGNSS, rCST
+from cssrlib.gnss import sat2id, id2sat, sat2prn
+from cssrlib.gnss import rSigRnx, uTYP, uGNSS, rCST
 from cssrlib.gnss import uTropoModel, ecef2pos, tropmodel, geodist, satazel
 from cssrlib.gnss import time2str, timediff, gpst2utc, tropmapf, uIonoModel
 from cssrlib.ppp import tidedisp, tidedispIERS2010, uTideModel
@@ -1165,10 +1166,6 @@ class pppos():
         # Clear pivot satellites of previous epoch
         #
         self.nav.satPivot = {}
-        for sat_i in obs.sat:
-            sys_i, _ = sat2prn(sat_i)
-            if sys_i not in self.nav.satPivot.keys():
-                self.nav.satPivot.update({sys_i: (None, np.deg2rad(-90))})
 
         # Loop over all satellites
         #
@@ -1294,7 +1291,8 @@ class pppos():
 
             # Store satellite with highest elevation angle as pivot satellite
             #
-            if self.nav.satPivot[sys_i][1] < el:
+            if sys_i not in self.nav.satPivot.keys() or \
+                    self.nav.satPivot[sys_i][1] < el:
                 self.nav.satPivot.update({sys_i: (sat_i, el)})
 
         return np.array(sat, dtype=int)
