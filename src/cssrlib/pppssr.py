@@ -5,7 +5,7 @@ module for standard PPP positioning
 import numpy as np
 
 from cssrlib.ephemeris import satposs
-from cssrlib.gnss import sat2id, id2sat, sat2prn
+from cssrlib.gnss import sat2id, id2sat, sat2prn, sys2str
 from cssrlib.gnss import rSigRnx, uTYP, uGNSS, rCST
 from cssrlib.gnss import uTropoModel, ecef2pos, tropmodel, geodist, satazel
 from cssrlib.gnss import time2str, timediff, gpst2utc, tropmapf, uIonoModel
@@ -1304,6 +1304,11 @@ class pppos():
             #
             i = idx[np.argmax(elv[idx])]
             self.nav.satPivot.update({sys_i: sat[i]})
+
+            if self.nav.monlevel > 0:
+                self.nav.fout.write(
+                    "{}  {} - edit - pivot satellite {}\n"
+                    .format(time2str(obs.t), sys2str(sys[i])[0:3], sat2id(sat[i])))
 
         return sat
 
