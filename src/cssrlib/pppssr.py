@@ -110,7 +110,7 @@ class pppos():
             self.nav.sig_qp = 0.01/np.sqrt(1)      # [m/sqrt(s)]
             self.nav.sig_qv = 1.0/np.sqrt(1)       # [m/s/sqrt(s)]
         self.nav.sig_qztd = 0.05/np.sqrt(3600)     # [m/sqrt(s)]
-        self.nav.sig_qion = 10.0/np.sqrt(1)        # [m/s/sqrt(s)]
+        self.nav.sig_qion = 0.5/np.sqrt(1)        # [m/s/sqrt(s)]
 
         # Processing options
         #
