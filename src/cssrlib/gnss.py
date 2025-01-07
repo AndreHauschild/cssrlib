@@ -811,9 +811,6 @@ class Nav():
 
         self.leaps = 18  # leap seconds [s]
 
-        # Pivot satellite for between-satellite single differences
-        self.satPivot = {}
-
         # Select tropospheric model
         #
         self.trpModel = uTropoModel.SAAST
