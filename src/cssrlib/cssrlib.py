@@ -315,7 +315,7 @@ class cssr:
         self.iodssr_c = np.ones(16, dtype=np.int32)*-1
         self.sig_n_p = []
 
-        # maximum validty time for correction
+        # maximum validity time for correction
         self.tmax = {sCType.CLOCK: 30.0, sCType.ORBIT: 120.0,
                      sCType.CBIAS: 120.0, sCType.PBIAS: 120.0,
                      sCType.TROP: 120.0, sCType.STEC: 120.0}
@@ -1211,7 +1211,7 @@ class cssr:
                                   skip_footer=0, encoding='utf8')
 
     def find_grid_index(self, pos):
-        """ find index/weight of surounding grid   """
+        """ find index/weight of surrounding grid   """
         self.rngmin = 5e3
         clat = np.cos(pos[0])
         dlat = np.deg2rad(self.grid['lat'])-pos[0]
@@ -1276,7 +1276,7 @@ class cssr:
         return trph, trpw
 
     def get_stec(self, dlat=0.0, dlon=0.0):
-        """ calculate STEC correction by interporation """
+        """ calculate STEC correction by interpolation """
         inet = self.inet_ref
         nsat = self.lc[inet].nsat_n
         stec = np.zeros(nsat)

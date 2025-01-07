@@ -7,15 +7,15 @@ from cssrlib.cssrlib import sCSSRTYPE as sc
 import numpy as np
 from cssrlib.gnss import uGNSS, rCST, sat2prn, timediff, timeadd, vnorm
 from cssrlib.gnss import gtime_t, Geph, Eph, Alm, prn2sat, gpst2time, \
-    time2gpst, timeget, time2gst, time2bdt, gst2time, bdt2time, epoch2time
+    time2gpst, timeget, time2gst, time2bdt, gst2time, bdt2time, epoch2time, time2str
 from datetime import datetime
 import xml.etree.ElementTree as et
 
 MAX_ITER_KEPLER = 30
 RTOL_KEPLER = 1e-13
 
-MAXDTOE_t = {uGNSS.GPS: 7201.0, uGNSS.GAL: 14400.0, uGNSS.QZS: 7201.0,
-             uGNSS.BDS: 7201.0, uGNSS.IRN: 7201.0, uGNSS.GLO: 1800.0,
+MAXDTOE_t = {uGNSS.GPS: 7200.0, uGNSS.GAL: 14400.0, uGNSS.QZS: 7200.0,
+             uGNSS.BDS: 7200.0, uGNSS.IRN: 7200.0, uGNSS.GLO: 1800.0,
              uGNSS.SBS: 360.0}
 
 
@@ -23,7 +23,7 @@ def findeph(nav, t, sat, iode=-1, mode=0):
     """ find ephemeris for sat """
     sys, _ = sat2prn(sat)
     eph = None
-    tmax = MAXDTOE_t[sys]
+    tmax = MAXDTOE_t[sys]+60  # extend validity period by 60 seconds
     tmin = tmax + 1.0
     for eph_ in nav:
         if eph_.sat != sat or (iode >= 0 and iode != eph_.iode):
