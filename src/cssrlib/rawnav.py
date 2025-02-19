@@ -26,7 +26,8 @@ import numpy as np
 import bitstruct.c as bs
 from cssrlib.gnss import gpst2time, gst2time, bdt2time, rCST
 from cssrlib.gnss import prn2sat, uGNSS, sat2prn, bdt2gpst, utc2gpst, time2gpst
-from cssrlib.gnss import Eph, Geph, uTYP, copy_buff, gtime_t, timeadd
+from cssrlib.gnss import Eph, Geph, uTYP, copy_buff, gtime_t, timeadd, Seph
+from cssrlib.gnss import tod2tow
 from cssrlib.rinex import rnxenc, rSigRnx
 
 
@@ -141,10 +142,14 @@ class RawNav():
 
     def urai2sva(self, urai, sys=uGNSS.GPS):
         """ GPS/QZSS SV accuracy [1] 20.3.3.3.1.3, [2] Tab. 5.4.3-2 """
-        urai_t = [2.40, 3.40, 4.85, 6.85, 9.65, 13.65, 24.00, 48.00, 96.00,
-                  192.00, 384.00, 768.00, 1536.00, 3072.00, 6144.00, -1.0]
+        # sva_t = [2.40, 3.40, 4.85, 6.85, 9.65, 13.65, 24.00, 48.00, 96.00,
+        #         192.00, 384.00, 768.00, 1536.00, 3072.00, 6144.00, -1.0]
 
-        return urai_t[urai]
+        # from RINEX 4.02
+        sva_t = [2.0, 2.8, 4.0, 5.7, 8.0, 11.3, 16.0, 32.0,
+                 64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0]
+
+        return sva_t[urai]
 
     def sisa2sva(self, sisa):
         """ Galileo SISA Index Values [3] Tab. 89 """
@@ -872,25 +877,31 @@ class RawNav():
 
         # decode Subframe 3
         i = 608
-        page, eph.svh, eph.integ, eph.sismai = bs.unpack_from('u6u2u3u4',
+        page, eph.svh, eph.integ, eph.sismai = bs.unpack_from('u6u2u3s4',
                                                               msg, i)
         i += 15
         if page == 1:  # Iono, BDT-UTC
-            eph.sisai[0] = bs.unpack_from('u5', msg, i)[0]
+            eph.sisai[0] = bs.unpack_from('u5', msg, i)[0]  # SISAI_oe
             i += 5
             i = self.decode_bds_cnav_sisai(msg, eph, i)
         elif page == 2:  # Reduced almanac
             i = self.decode_bds_cnav_sisai(msg, eph, i)
             i += 22
         elif page == 3:  # EOP, BGTO
-            eph.sisai[0] = bs.unpack_from('u5', msg, i)[0]
+            eph.sisai[0] = bs.unpack_from('u5', msg, i)[0]  # SISAI_oe
             i += 5
+            # EOP
+            # BGTO
         elif page == 4:  # Midi almanac
             i = self.decode_bds_cnav_sisai(msg, eph, i)
             i += 22
+            # Midi Almanac
 
         # i += 264-15
         eph.mode = 1  # B-CNAV1
+
+        if page != 1:  # page 1 include SISAI*
+            return None
 
         return eph
 
@@ -917,7 +928,7 @@ class RawNav():
         id4, sow4 = bs.unpack_from('u6u18', buff, 320*3+6)
         id5, sow5 = bs.unpack_from('u6u18', buff, 320*4+6)
 
-        if id1 != 10 or id2 != 11 or id3 != 30 or id4 != 34 or id5 != 40:
+        if id1 != 10 or id2 != 11 or id3 != 30 or id5 != 40:
             return None
 
         if sow2 != sow1+1 or sow3 != sow2+1:
@@ -935,11 +946,13 @@ class RawNav():
         if id5 == 40:
             i = 320*4+42
             eph.sisai[0] = bs.unpack_from('u5', buff, i)[0]
+            i += 5
+            i = self.decode_bds_cnav_sisai(buff, eph, i)
 
         # decode MT10
         i = 30
         eph.week, ib2a, eph.sismai, ib1c, eph.iode = bs.unpack_from(
-            'u13u3u4u3u8', buff, i)
+            'u13u3s4u3u8', buff, i)
         i += 31
         i = self.decode_bds_cnav_eph1(buff, eph, i)
         eph.integ = (ib2a << 3)+ib1c
@@ -961,7 +974,7 @@ class RawNav():
             return None
 
         i = self.decode_bds_cnav_iono(buff, i)
-        tgd_b1cp = bs.unpack_from('u12', buff, i)[0]
+        tgd_b1cp = bs.unpack_from('s12', buff, i)[0]
 
         eph.tgd = tgd_b1cp*rCST.P2_34
         eph.isc[1] = isc_b2ad*rCST.P2_34
@@ -1008,7 +1021,7 @@ class RawNav():
         i = self.decode_bds_cnav_eph1(buff, eph, i)
         i = self.decode_bds_cnav_eph2(buff, eph, i)
 
-        eph.integ, eph.sismai = bs.unpack_from('u3u4', buff, i)
+        eph.integ, eph.sismai = bs.unpack_from('u3s4', buff, i)
         i += 7
 
         # decode MT30
@@ -1030,19 +1043,18 @@ class RawNav():
 
         return eph
 
-    def decode_bds_d1(self, week, time, sat, msg):
+    def decode_bds_d1(self, week, time, sat, msg, i=0):
         """ BDS D1 Message decoder """
 
         sys, prn = sat2prn(sat)
-
-        i = 0
         pre, _, sid, sow1 = bs.unpack_from('u11u4u3u8', msg, i)
-        i += 30
         if pre != 0x712:
             return None
 
         buff = self.bds_d12[prn-1]
-        buff[(sid-1)*40:(sid-1)*40+40] = msg[0:40]
+        i0 = (sid-1)*40
+        # copy_buff(msg, buff, i, i0, 40*8-i)
+        buff[i0:i0+40] = msg[0:40]
 
         buff = bytes(buff)
         id1 = bs.unpack_from('u3', buff, 15)[0]
@@ -1799,6 +1811,49 @@ class RawNav():
         geph.mode = stype  # FDMA:0,L1OC:1,L2OC:2,L3OC:3
 
         return geph
+
+    def decode_sbs_l1(self, week, time, sat, msg):
+        ura_t = [2, 2.8, 4, 5.7, 8, 11.3, 16, 32,
+                 64, 128, 256, 512, 1024, 2048, 4096, 0]
+
+        pre, mt, iodn = bs.unpack_from('u8u6u8', msg, 0)
+        i = 22
+
+        if pre not in (0x53, 0x9a, 0xc6):
+            return None
+
+        if mt != 9:
+            return None
+
+        t0, ura, xg, yg, zg = bs.unpack_from('u13u4s30s30s25', msg, i)
+        i += 102
+        vxg, vyg, vzg = bs.unpack_from('s17s17s18', msg, i)
+        i += 52
+        axg, ayg, azg = bs.unpack_from('s10s10s10', msg, i)
+        i += 30
+        af0, af1 = bs.unpack_from('s12s8', msg, i)
+        i += 20
+
+        seph = Seph(sat)
+        seph.tof = gpst2time(week, time)
+        seph.t0 = tod2tow(t0*16.0, seph.tof)
+        seph.iodn = iodn
+        seph.svh = 0 if ura != 15 else 1
+        seph.sva = ura_t[ura]
+        seph.mode = 0
+        seph.pos[0] = xg*0.08
+        seph.pos[1] = yg*0.08
+        seph.pos[2] = zg*0.4
+        seph.vel[0] = vxg*6.25e-4
+        seph.vel[1] = vyg*6.25e-4
+        seph.vel[2] = vzg*4.0e-3
+        seph.acc[0] = axg*1.25e-5
+        seph.acc[1] = ayg*1.25e-5
+        seph.acc[2] = azg*6.25e-5
+        seph.af0 = af0*rCST.P2_31
+        seph.af1 = af1*rCST.P2_40
+
+        return seph
 
 
 class rcvOpt():
