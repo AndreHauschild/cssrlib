@@ -1305,10 +1305,11 @@ class pppos():
             i = idx[np.argmax(elv[idx])]
             self.nav.satPivot.update({sys_i: sat[i]})
 
-            if self.nav.monlevel > 0:
-                self.nav.fout.write(
-                    "{}  {} - edit - pivot satellite {}\n"
-                    .format(time2str(obs.t), sys2str(sys[i])[0:3], sat2id(sat[i])))
+        if self.nav.monlevel > 0:
+            self.nav.fout.write(
+                "{}  {} - edit - pivot satellites {}\n"
+                .format(time2str(obs.t), "   ",
+                        " ".join([sat2id(s) for s in self.nav.satPivot.values()])))
 
         return sat
 
