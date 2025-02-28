@@ -382,7 +382,7 @@ class stdpos(pppos):
         #
         for sys in obs.sig.keys():
 
-            # Loop over twice the number of frequencies
+            # Loop over the number of frequencies
             #
             for f in range(0, nf):
                 # Select satellites from one constellation only
