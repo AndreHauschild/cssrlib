@@ -78,6 +78,7 @@ class rCST():
     FREQ_S1 = 1575.42e6      # [Hz] SBS L1
     FREQ_S5 = 1176.45e6      # [Hz] SBS L5
 
+    FREQ_I1 = 1575.42e6      # [Hz] IRS L1
     FREQ_I5 = 1191.795e6     # [Hz] IRS L5
     FREQ_IS = 2492.028e6     # [Hz] IRS S
 
@@ -481,7 +482,8 @@ class rSigRnx():
                    (s[1] == '6' and s[2] not in 'IQXDPZ'):
                     raise ValueError
             elif sys == uGNSS.IRN:
-                if (s[1] == '5' and s[2] not in 'ABCX') or \
+                if (s[1] == '1' and s[2] not in 'DPX') or \
+                   (s[1] == '5' and s[2] not in 'ABCX') or \
                    (s[1] == '9' and s[2] not in 'ABCX'):
                     raise ValueError
 
@@ -590,7 +592,9 @@ class rSigRnx():
             elif int(self.sig / 100) == 5:
                 return rCST.FREQ_S5
         elif self.sys == uGNSS.IRN:
-            if int(self.sig / 100) == 5:
+            if int(self.sig / 100) == 1:
+                return rCST.FREQ_I1
+            elif int(self.sig / 100) == 5:
                 return rCST.FREQ_I5
             elif int(self.sig / 100) == 9:
                 return rCST.FREQ_IS
@@ -1277,10 +1281,10 @@ def dops_h(H):
     """ calculate DOP from H """
     Qinv = np.linalg.inv(np.dot(H.T, H))
     dop = np.diag(Qinv)
-    hdop = dop[0]+dop[1]  # TBD
-    vdop = dop[2]  # TBD
-    pdop = hdop+vdop
-    gdop = pdop+dop[3]
+    hdop = np.sqrt(dop[0]+dop[1])
+    vdop = np.sqrt(dop[2])
+    pdop = np.sqrt(np.sum(dop[0:3]))
+    gdop = np.sqrt(np.sum(dop[0:4]))
     dop = np.array([gdop, pdop, hdop, vdop])
     return dop
 
@@ -1302,14 +1306,7 @@ def dops(az, el, elmin=0):
         n += 1
     if n < 4:
         return None
-    Qinv = np.linalg.inv(np.dot(H.T, H))
-    dop = np.diag(Qinv)
-    hdop = dop[0]+dop[1]  # TBD
-    vdop = dop[2]  # TBD
-    pdop = hdop+vdop
-    gdop = pdop+dop[3]
-    dop = np.array([gdop, pdop, hdop, vdop])
-    return dop
+    return dops_h(H)
 
 
 def xyz2enu(pos):

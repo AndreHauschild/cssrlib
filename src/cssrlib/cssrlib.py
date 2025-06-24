@@ -1,9 +1,9 @@
 """
 module for Compact SSR processing
 
-[1] Specification of Compact SSR Messages for Satellite Based Augmentation 
+[1] Specification of Compact SSR Messages for Satellite Based Augmentation
     Service, v08, DOI: 10.13140/RG.2.2.10749.49129, 2019
-    
+
 @author Rui Hirokawa
 
 """
@@ -1265,7 +1265,7 @@ class cssr:
         return dlat, dlon
 
     def get_trop(self, dlat=0.0, dlon=0.0):
-        """ calculate trop delay correction by interporation """
+        """ calculate trop delay correction by interpolation """
         inet = self.inet_ref
         trph = 0
         trpw = 0
