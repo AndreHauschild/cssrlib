@@ -443,6 +443,7 @@ class rtcm(cssr):
 
         qzs_tbl = {
             2: uSIG.L1C,
+            3: uSIG.L1E,
             9: uSIG.L6S,
             10: uSIG.L6L,
             11: uSIG.L6X,
@@ -1273,10 +1274,6 @@ class rtcm(cssr):
         rr = np.zeros(self.nsat)
 
         rms = rCST.CLIGHT*1e-3
-        P2_10 = 0.0009765625
-        P2_24 = 5.960464477539063E-08
-        P2_29 = 1.862645149230957E-09
-        P2_31 = 4.656612873077393E-10
 
         # satellite part
         if msm >= 1 and msm <= 3:
@@ -1297,7 +1294,7 @@ class rtcm(cssr):
                     i += 4
             for k in range(self.nsat):
                 if r[k] != 0.0:
-                    r[k] += bs.unpack_from('u10', msg, i)[0]*P2_10*rms
+                    r[k] += bs.unpack_from('u10', msg, i)[0]*rCST.P2_10*rms
                 i += 10
             if msm == 5 or msm == 7:
                 for k in range(self.nsat):
@@ -1308,7 +1305,7 @@ class rtcm(cssr):
         # signal part
         if msm != 2:
             sz = 15 if msm < 6 else 20
-            scl = P2_24 if msm < 6 else P2_29
+            scl = rCST.P2_24 if msm < 6 else rCST.P2_29
             for k in range(ncell):
                 pr_ = bs.unpack_from('s'+str(sz), msg, i)[0]
                 i += sz
@@ -1316,7 +1313,7 @@ class rtcm(cssr):
 
         if msm > 1:
             sz = 22 if msm < 6 else 24
-            scl = P2_29 if msm < 6 else P2_31
+            scl = rCST.P2_29 if msm < 6 else rCST.P2_31
             for k in range(ncell):
                 cp_ = bs.unpack_from('s'+str(sz), msg, i)[0]
                 i += sz
@@ -1402,11 +1399,14 @@ class rtcm(cssr):
 
             if sat_ in self.lock:
                 for j, ll in enumerate(ll_):
+                    if sig[j] not in self.sig_n:
+                        continue
+                    idx = sig.index(sig[j])
                     ll_p = self.lock[sat_][j]
                     if (ll == 0 & ll_p != 0) | ll < ll_p:
-                        obs.lli[k, j] |= 1
+                        obs.lli[k, idx] |= 1
                     if hf_[j] > 0:
-                        obs.lli[k, j] |= 3
+                        obs.lli[k, idx] |= 3
 
             self.lock[sat_] = ll_
 
