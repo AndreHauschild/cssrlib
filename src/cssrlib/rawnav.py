@@ -11,7 +11,7 @@ Raw Navigation Message decoder
     Satellite Positioning, Navigation and Timing Service (IS-QZSS-PNT-006),
     2024
 [3] Galileo Open Service Signal-in-Space Interface Control Document
-    (OS SIS ICD) Issue 2.1, 2023
+    (OS SIS ICD) Issue 2.2, 2025
 [4] BeiDou Navigation Satellite System Signal In Space Interface Control
     Document: Open Service Signal B1C (Version 1.0), 2017
 [5] GLONASS Interface Control Document (Edition 5.1), 2008
@@ -26,7 +26,7 @@ import numpy as np
 import bitstruct.c as bs
 import struct as st
 from cssrlib.gnss import gpst2time, gst2time, bdt2time, rCST
-from cssrlib.gnss import prn2sat, uGNSS, sat2prn, bdt2gpst, utc2gpst, time2gpst
+from cssrlib.gnss import uGNSS, sat2prn, bdt2gpst, utc2gpst, time2gpst
 from cssrlib.gnss import Eph, Geph, uTYP, copy_buff, gtime_t, timeadd, Seph
 from cssrlib.gnss import tod2tow
 from cssrlib.rinex import rnxenc, rSigRnx
@@ -59,6 +59,7 @@ def gep2time(N4, Nt, sod):
 
 class RawNav():
     """ Raw Navigation Message decoder """
+
     def __init__(self, opt=None, prefix=''):
         self.gps_lnav = {}
         for k in range(uGNSS.GPSMAX):
@@ -488,6 +489,7 @@ class RawNav():
         alp = np.array([a0*rCST.P2_30, a1*rCST.P2_27,
                         a2*rCST.P2_24, a3*rCST.P2_24])
         bet = np.array([b0*(2**11), b1*(2**14), b2*(2**16), b3*(2**16)])
+
         return i
 
     def decode_gps_cnav_utc(self, msg, i):
@@ -1467,6 +1469,9 @@ class RawNav():
         i += 103+3
         prn = bs.unpack_from('u6', msg, i)[0]
 
+        if prn != prn_:
+            return None
+
         tow = itow*7200+toi*18
 
         # subframe 3 (274)
@@ -1487,7 +1492,7 @@ class RawNav():
         elif msgid == 17:  # NavIC Time offsets
             i = self.decode_irn_l1nav_utc(msg, i)
         elif msgid == 0:  # null message
-            None
+            pass
 
         i += 243
 

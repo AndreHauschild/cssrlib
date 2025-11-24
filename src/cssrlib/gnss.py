@@ -1652,3 +1652,57 @@ def load_config(file_path):
     with open(file_path, 'r') as file:
         config = yaml.safe_load(file)
     return config
+
+
+trop_model_tbl = {
+    "": uTropoModel.NONE,
+    "SAAST": uTropoModel.SAAST,
+    "HOPF": uTropoModel.HOPF,
+    "SBAS": uTropoModel.SBAS
+}
+
+iono_model_tbl = {
+    "": uIonoModel.NONE,
+    "KLOBUCHAR": uIonoModel.KLOBUCHAR,
+    "NEQUICK_G": uIonoModel.GIM,
+    "SBAS": uIonoModel.SBAS
+}
+
+
+default_config = {
+    "nav": {
+        "ephopt": 2,  # 2: SSR-APC
+        "trop_opt": 1,
+        "iono_opt": 1,
+        "phw_opt": 1,
+        "cmooth": False,
+        "trop_model": "SAAST",
+        "iono_model": "KLOBUCHAR",
+
+        "eratio": [50.0, 50.0],
+        "err": [0, 0.007, 0.0035],
+
+        # initial value of covariance
+        "sig_p0": 100.0,  # [m]
+        "sig_v0": 1.0,  # [m/s]
+        "sig_ztd0": 0.1,  # [m]
+        "sig_ion0": 10.0,  # [m]
+        "sig_n0": 30.0,  # [cyc]
+
+        # Process noise sigma
+        # "sig_qp": 100.0,
+        "sig_qp": 1e-2,  # [m/sqrt(s)]
+        "sig_qv": 1.0,  # [m]
+        "sig_qztd": 0.0008,  # [m]
+        "sig_qiono": 10.0,  # [m]
+        "sig_qb": 1e-4,  # [m]
+
+        # AR parameters
+        "armode": 0,  # 0:float-ppp,1:continuous,2:instantaneous,3:fix-and-hold
+        "parmode": 2,  # Partial AR 1: normal, 2: PAR
+        "par_P0": 0.995,  # probability of sussefull AR
+        "thresar": 3.0,  # AR acceptance threshold
+        "elmaskar": 20.0,
+
+    }
+}

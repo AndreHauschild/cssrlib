@@ -6,8 +6,9 @@ import numpy as np
 
 from cssrlib.ephemeris import satposs
 from cssrlib.gnss import sat2id, sat2prn, rSigRnx, uTYP, uGNSS, rCST
-from cssrlib.gnss import uTropoModel, ecef2pos, tropmodel, geodist, satazel
-from cssrlib.gnss import time2str, timediff, gpst2utc, tropmapf, uIonoModel
+from cssrlib.gnss import ecef2pos, tropmodel, geodist, satazel
+from cssrlib.gnss import time2str, timediff, gpst2utc, tropmapf
+from cssrlib.gnss import trop_model_tbl, iono_model_tbl, default_config
 from cssrlib.ppp import tidedisp, tidedispIERS2010, uTideModel
 from cssrlib.ppp import shapiro, windupcorr
 from cssrlib.peph import antModelRx, antModelTx
@@ -31,34 +32,52 @@ class pppos():
     VAR_HOLDAMB = 0.001
 
     def __init__(self, nav, pos0=np.zeros(3),
-                 logfile=None, trop_opt=1, iono_opt=1, phw_opt=1):
+                 logfile=None, trop_opt=-1, iono_opt=-1, phw_opt=-1,
+                 config=None):
         """ initialize variables for PPP """
+
+        if config is None:
+            config = default_config
+
+        if trop_opt > 0:
+            config['nav']['trop_opt'] = trop_opt
+        if iono_opt > 0:
+            config['nav']['iono_opt'] = iono_opt
+        if phw_opt > 0:
+            config['nav']['phw_opt'] = phw_opt
 
         self.nav = nav
 
         # Number of frequencies (actually signals!)
         #
-        self.nav.ephopt = 2  # SSR-APC
+        if 'ephopt' in config['nav']:
+            self.nav.ephopt = config['nav']['ephopt']  # SSR-APC
 
         # Select tropospheric model
         #
-        self.nav.trpModel = uTropoModel.SAAST
+        if 'trop_model' in config['nav']:
+            self.nav.trpModel = trop_model_tbl[config['nav']['trop_model']]
 
         # Select iono model
         #
-        self.nav.ionoModel = uIonoModel.KLOBUCHAR
+        if 'iono_model' in config['nav']:
+            self.nav.ionoModel = iono_model_tbl[config['nav']['iono_model']]
 
         # 0: use trop-model, 1: estimate, 2: use cssr correction
-        self.nav.trop_opt = trop_opt
+        if 'trop_opt' in config['nav']:
+            self.nav.trop_opt = config['nav']['trop_opt']
 
         # 0: use iono-model, 1: estimate, 2: use cssr correction
-        self.nav.iono_opt = iono_opt
+        if 'iono_opt' in config['nav']:
+            self.nav.iono_opt = config['nav']['iono_opt']
 
         # 0: none, 1: full model, 2: local/regional model
-        self.nav.phw_opt = phw_opt
+        if 'phw_opt' in config['nav']:
+            self.nav.phw_opt = config['nav']['phw_opt']
 
         # carrier smoothing
-        self.nav.csmooth = False
+        if 'csmooth' in config['nav']:
+            self.nav.csmooth = config['nav']['csmooth']
 
         # Position (+ optional velocity), zenith tropo delay and
         # slant ionospheric delay states
@@ -89,41 +108,58 @@ class pppos():
         #
         # Observation noise parameters
         #
-        self.nav.eratio = np.ones(self.nav.nf)*50  # [-] factor
-        self.nav.err = [0, 0.01, 0.005]/np.sqrt(2)  # [m] sigma
+        if 'eratio' in config['nav']:
+            self.nav.eratio = config['nav']['eratio']
+        if 'err' in config['nav']:
+            self.nav.err = config['nav']['err']  # [m]
 
         # Initial sigma for state covariance
         #
-        self.nav.sig_p0 = 100.0   # [m]
-        self.nav.sig_v0 = 1.0     # [m/s]
-        self.nav.sig_ztd0 = 0.1  # [m]
-        self.nav.sig_ion0 = 10.0  # [m]
-        self.nav.sig_n0 = 30.0    # [cyc]
+        if 'sig_p0' in config['nav']:
+            self.nav.sig_p0 = config['nav']['sig_p0']   # [m]
+        if 'sig_v0' in config['nav']:
+            self.nav.sig_v0 = config['nav']['sig_v0']     # [m/s]
+        if 'sig_ztd0' in config['nav']:
+            self.nav.sig_ztd0 = config['nav']['sig_ztd0']  # [m]
+        if 'sig_ion0' in config['nav']:
+            self.nav.sig_ion0 = config['nav']['sig_ion0']  # [m]
+        if 'sig_n0' in config['nav']:
+            self.nav.sig_n0 = config['nav']['sig_n0']    # [cyc]
 
         # Process noise sigma
         #
-        if self.nav.pmode == 0:
-            self.nav.sig_qp = 100.0/np.sqrt(1)     # [m/sqrt(s)]
-            self.nav.sig_qv = None
-        else:
-            self.nav.sig_qp = 0.01/np.sqrt(1)      # [m/sqrt(s)]
-            self.nav.sig_qv = 1.0/np.sqrt(1)       # [m/s/sqrt(s)]
-        self.nav.sig_qztd = 0.05/np.sqrt(3600)     # [m/sqrt(s)]
-        self.nav.sig_qion = 10.0/np.sqrt(1)        # [m/s/sqrt(s)]
-        self.nav.sig_qb = 1e-4/np.sqrt(1)          # [m/s/sqrt(s)]
+        if 'sig_qp' in config['nav']:
+            self.nav.sig_qp = config['nav']['sig_qp']  # [m/sqrt(s)]
+        if 'sig_qv' in config['nav']:
+            self.nav.sig_qv = config['nav']['sig_qv']  # [m/s/sqrt(s)]
+        if 'sig_qztd' in config['nav']:
+            self.nav.sig_qztd = config['nav']['sig_qztd']  # [m/sqrt(s)]
+        if 'sig_qion' in config['nav']:
+            self.nav.sig_qion = config['nav']['sig_qion']  # [m/s/sqrt(s)]
+        if 'sig_qb' in config['nav']:
+            self.nav.sig_qb = config['nav']['sig_qb']  # [m/s/sqrt(s)]
 
         # Processing options
         #
         self.nav.tidecorr = uTideModel.IERS2010
         # self.nav.tidecorr = uTideModel.SIMPLE
-        self.nav.thresar = 3.0  # AR acceptance threshold
+        if 'thresar' in config['nav']:
+            # AR acceptance threshold
+            self.nav.thresar = config['nav']['thresar']
         # 0:float-ppp,1:continuous,2:instantaneous,3:fix-and-hold
-        self.nav.armode = 0
-        self.nav.elmaskar = np.deg2rad(20.0)  # elevation mask for AR
-        self.nav.elmin = np.deg2rad(15.0)
+        if 'armode' in config['nav']:
+            self.nav.armode = config['nav']['armode']
+        if 'elmaskar' in config['nav']:
+            self.nav.elmaskar = \
+                config['nav']['elmaskar']*rCST.D2R  # elevation mask for AR
+        if 'elmin' in config['nav']:
+            self.nav.elmin = config['nav']['elmin']*rCST.D2R
 
-        self.nav.parmode = 2  # 1: normal, 2: PAR
-        self.nav.par_P0 = 0.995  # probability of sussefull AR
+        if 'parmode' in config['nav']:
+            self.nav.parmode = config['nav']['parmode']  # 1: normal, 2: PAR
+        # probability of sussefull AR
+        if 'par_P0' in config['nav']:
+            self.nav.par_P0 = config['nav']['par_P0']
 
         # Initial state vector
         #
@@ -1071,7 +1107,7 @@ class pppos():
         ix = np.resize(ix, (nb, 2))
         return ix
 
-    def resamb_lambda(self, sat, armode=1, P0=0.995):
+    def resamb_lambda(self, sat, parmode=1, P0=0.995):
         """ resolve integer ambiguity using LAMBDA method """
         nx = self.nav.nx
         na = self.nav.na
@@ -1089,8 +1125,8 @@ class pppos():
         Qab = self.nav.P[0:na, ix[:, 0]]-self.nav.P[0:na, ix[:, 1]]
 
         # MLAMBDA ILS
-        b, s, nfix, Ps = mlambda(y, Qb, armode=armode, P0=P0)
-        if nfix > 0 and (armode == 2 or s[0] <= 0.0 or
+        b, s, nfix, Ps = mlambda(y, Qb, parmode=parmode, P0=P0)
+        if nfix > 0 and (parmode == 2 or s[0] <= 0.0 or
                          s[1]/s[0] >= self.nav.thresar):
             self.nav.xa = self.nav.x[0:na].copy()
             self.nav.Pa = self.nav.P[0:na, 0:na].copy()
@@ -1103,7 +1139,7 @@ class pppos():
             # restore SD ambiguity
             xa = self.restamb(bias, nb)
 
-        elif armode == 2 and nfix == 0:
+        elif parmode == 2 and nfix == 0:
             nb = 0
             if self.nav.monlevel > 0:
                 self.nav.fout.write(
