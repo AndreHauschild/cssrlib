@@ -1694,7 +1694,7 @@ default_config = {
         "sig_qp": 1e-2,  # [m/sqrt(s)]
         "sig_qv": 1.0,  # [m]
         "sig_qztd": 0.0008,  # [m]
-        "sig_qiono": 10.0,  # [m]
+        "sig_qion": 10.0,  # [m]
         "sig_qb": 1e-4,  # [m]
 
         # AR parameters
