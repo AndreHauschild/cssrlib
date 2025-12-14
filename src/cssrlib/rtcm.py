@@ -20,7 +20,7 @@ from cssrlib.cssrlib import cssr, sCSSR, prn2sat, sCType, cssre
 from cssrlib.gnss import uGNSS, sat2id, gpst2time, timediff, time2str, sat2prn
 from cssrlib.gnss import uTYP, uSIG, rSigRnx, bdt2time, bdt2gpst, glo2time
 from cssrlib.gnss import time2bdt, gpst2bdt, rCST, time2gpst, utc2gpst, timeadd
-from cssrlib.gnss import gtime_t, sys2str, sat2prn, sat2id
+from cssrlib.gnss import gtime_t, sys2str, sat2prn, sat2id, gpst2utc
 from crccheck.crc import Crc24LteA
 from enum import IntEnum
 from cssrlib.gnss import Eph, Obs, Geph, Seph
@@ -39,9 +39,9 @@ class sRTCM(IntEnum):
     BDS_EPH = 1014
     QZS_EPH = 1015
     IRN_EPH = 1016
-    SBS_EPH = 1016
+    SBS_EPH = 1017
 
-    # test messages
+    # SC-134 test messages
     INTEG_MIN = 2003
     INTEG_EXT = 2004
     INTEG_EXT_SIS = 2005
@@ -53,6 +53,16 @@ class sRTCM(IntEnum):
     INTEG_SSR = 2011
     INTEG_SSR_IONO = 2012
     INTEG_SSR_TROP = 2013
+
+    # RTCM SSR test messages
+    SSR_META = 60
+    SSR_GRID = 61
+    SSR_SATANT = 80
+    SSR_TROP = 95
+    SSR_STEC = 96
+    SSR_HCLK = 46
+    SSR_PBIAS = 85
+    SSR_PBIAS_EX = 90
 
 
 class Integrity():
@@ -175,6 +185,20 @@ class Integrity():
         self.vp_r_tbl = {s: k for k, s in enumerate(self.vp_tbl)}
 
 
+class TropModel():
+    """ Tropospheric delay correction model for RTCM SSR """
+
+    def __init__(self):
+        self.dah = 0.0  # DF+38
+        self.dbh = 0.0  # DF+39
+        self.dch = 0.0  # DF+40
+        self.daw = 0.0  # DF+41
+        self.dbw = 0.0  # DF+42
+        self.dcw = 0.0  # DF+43
+        self.rh = np.array([])
+        self.rw = np.array([])
+
+
 class rtcm(cssr):
     """ class to decode RTCM3 messages """
 
@@ -189,6 +213,8 @@ class rtcm(cssr):
 
         self.pid = 0  # SSR Provider ID
         self.sid = 0  # SSR Solution Type
+        self.uint = 0  # Update Interval
+        self.mi = 0
 
         self.nrtk_r = {}
 
@@ -245,13 +271,13 @@ class rtcm(cssr):
                 break
         return sys, ssr
 
-    def svid2sat(self, sys, svid):
+    def svid2sat(self, sys, svid, f_rtcm=False):
         """ convert svid to sat """
         prn = svid
         if sys == uGNSS.QZS:
-            prn += 192
+            prn += uGNSS.MINPRNQZS-11 if f_rtcm else uGNSS.MINPRNQZS-1
         elif sys == uGNSS.SBS:
-            prn += 119
+            prn += uGNSS.MINPRNSBS-1
         return prn2sat(sys, prn)
 
     def ssig2rsig(self, sys: uGNSS, utyp: uTYP, ssig):
@@ -279,9 +305,12 @@ class rtcm(cssr):
             1: uSIG.L1P,
             2: uSIG.L2C,
             3: uSIG.L2P,
+            4: uSIG.L4A,
+            5: uSIG.L4B,
+            6: uSIG.L6A,
+            7: uSIG.L6B,
             10: uSIG.L3I,
             11: uSIG.L3Q,
-            12: uSIG.L3X,
         }
 
         gal_tbl = {
@@ -322,6 +351,7 @@ class rtcm(cssr):
             12: uSIG.L5D,
             13: uSIG.L5P,
             14: uSIG.L5X,
+            15: uSIG.L1A,
         }
 
         qzs_tbl = {
@@ -330,20 +360,14 @@ class rtcm(cssr):
             2: uSIG.L1C,
             3: uSIG.L2S,
             4: uSIG.L2L,
-            5: uSIG.L2X,
             6: uSIG.L5I,
             7: uSIG.L5Q,
-            8: uSIG.L5X,
             9: uSIG.L6S,
             10: uSIG.L6L,
             11: uSIG.L6X,
             12: uSIG.L1X,
-            13: uSIG.L1Z,
-            14: uSIG.L5D,
-            15: uSIG.L5P,
-            16: uSIG.L5Z,
             17: uSIG.L6E,
-            18: uSIG.L6Z,
+            19: uSIG.L1E,  # TBD
         }
 
         sbs_tbl = {
@@ -533,8 +557,13 @@ class rtcm(cssr):
         if self.subtype == sCSSR.PBIAS:
             ci, mw = bs.unpack_from('u1u1', msg, i)
             i += 2
+        elif self.subtype == sRTCM.SSR_PBIAS:
+            # Satellite Yaw Information Indicator DF486
+            # Extended Phase Bias Property ID DF+2
+            iyaw, self.iexpb = bs.unpack_from('b1u4', msg, i)
+            i += 5
 
-        if self.subtype != sCSSR.VTEC:
+        if self.subtype not in [sCSSR.VTEC, sRTCM.SSR_PBIAS_EX, sRTCM.SSR_STEC]:
             nsat = bs.unpack_from('u6', msg, i)[0]
             i += 6
         else:
@@ -543,7 +572,11 @@ class rtcm(cssr):
         self.pid = pid
         self.sid = sid
 
-        v = {'iodssr': iodssr, 'nsat': nsat}
+        v = {'iodssr': iodssr, 'uint': uint, 'mi': mi, 'nsat': nsat}
+        if self.subtype == sRTCM.SSR_PBIAS:
+            v['iyaw'] = iyaw
+            v['iexpb'] = self.iexpb
+
         return i, v
 
     def decode_sat(self, msg, i, sys=uGNSS.NONE):
@@ -596,8 +629,8 @@ class rtcm(cssr):
         dclk, ddclk, dddclk = bs.unpack_from('s22s21s27', msg, i)
         i += 70
         self.dclk_n[k] = self.sval(dclk, 22, 0.1e-3)
-        # self.lc[inet].ddclk[k] = self.sval(ddclk, 21, 0.4e-3)
-        # self.lc[inet].dddclk[k] = self.sval(dddclk, 27, 4e-6)
+        self.ddclk_n[k] = self.sval(ddclk, 21, 0.4e-3)
+        self.dddclk_n[k] = self.sval(dddclk, 27, 4e-6)
         return i
 
     def decode_hclk_sat(self, msg, i, k, inet=0):
@@ -628,6 +661,36 @@ class rtcm(cssr):
                 tbl_t = {1265: uGNSS.GPS, 1266: uGNSS.GLO, 1267: uGNSS.GAL,
                          1268: uGNSS.QZS, 1269: uGNSS.SBS, 1270: uGNSS.BDS}
                 return tbl_t[msgtype]
+            # RTCM SSR test messages
+            elif msgtype >= 41 and msgtype < 47:  # OBC
+                return uGNSS.GLO
+            elif msgtype in [62, 65, 68, 71, 74, 77]:  # OBC
+                return uGNSS.GAL
+            elif msgtype in [63, 66, 69, 72, 75, 78]:  # OBC
+                return uGNSS.BDS
+            elif msgtype in [64, 67, 70, 73, 76, 79]:  # OBC
+                return uGNSS.QZS
+            elif msgtype >= 80 and msgtype < 85:  # proposed satellite antenna
+                tbl_t = {80: uGNSS.GPS, 81: uGNSS.GLO, 82: uGNSS.GAL,
+                         83: uGNSS.BDS, 84: uGNSS.QZS}
+                return tbl_t[msgtype]
+            elif msgtype >= 85 and msgtype < 90:  # proposed phase bias
+                tbl_t = {85: uGNSS.GPS, 86: uGNSS.GLO, 87: uGNSS.GAL,
+                         88: uGNSS.BDS, 89: uGNSS.QZS}
+                return tbl_t[msgtype]
+            elif msgtype >= 90 and msgtype < 95:  # proposed phase bias
+                tbl_t = {90: uGNSS.GPS, 91: uGNSS.GLO, 92: uGNSS.GAL,
+                         93: uGNSS.BDS, 94: uGNSS.QZS}
+                return tbl_t[msgtype]
+            elif msgtype >= 96 and msgtype < 101:  # regional iono
+                tbl_t = {96: uGNSS.GPS, 97: uGNSS.GLO, 98: uGNSS.GAL,
+                         99: uGNSS.BDS, 100: uGNSS.QZS}
+            elif msgtype in [60, 61, 95]:  # METADATA, grid definition, trop
+                return uGNSS.NONE
+            else:
+                print(f"definition of {msgtype} is missing")
+
+            return tbl_t[msgtype]
 
     def decode_cssr_orb(self, msg, i, inet=0):
         """ decode RTCM Orbit Correction message """
@@ -644,8 +707,11 @@ class rtcm(cssr):
             self.sat_n = []
             self.lc[inet].iode = {}
             self.lc[inet].dorb = {}
+            self.lc[inet].ddorb = {}
 
         self.iodssr = v['iodssr']
+        self.uint = v['uint']
+        self.mi = v['mi']
         sat = []
         for k in range(nsat):
             i, sat_ = self.decode_sat(msg, i, sys)
@@ -653,6 +719,7 @@ class rtcm(cssr):
             sat.append(sat_)
             self.lc[inet].iode[sat_] = self.iode_n[k]
             self.lc[inet].dorb[sat_] = self.dorb_n[k, :]
+            self.lc[inet].ddorb[sat_] = self.ddorb_n[k, :]
 
             self.set_t0(inet, sat_, sCType.ORBIT, self.time)
 
@@ -676,12 +743,23 @@ class rtcm(cssr):
 
         if timediff(self.time, self.lc[inet].t0s[sCType.CLOCK]) > 0:
             self.lc[inet].dclk = {}
+            self.lc[inet].ddclk = {}
+            self.lc[inet].dddclk = {}
 
         self.dclk_n = np.zeros(nsat)
+        self.ddclk_n = np.zeros(nsat)
+        self.dddclk_n = np.zeros(nsat)
+
+        self.iodssr = v['iodssr']
+        self.uint = v['uint']
+        self.mi = v['mi']
+
         for k in range(nsat):
             i, sat_ = self.decode_sat(msg, i, sys)
             i = self.decode_clk_sat(msg, i, k)
             self.lc[inet].dclk[sat_] = self.dclk_n[k]
+            self.lc[inet].ddclk[sat_] = self.ddclk_n[k]
+            self.lc[inet].dddclk[sat_] = self.dddclk_n[k]
 
             self.set_t0(inet, sat_, sCType.CLOCK, self.time)
 
@@ -702,6 +780,10 @@ class rtcm(cssr):
         if timediff(self.time, self.lc[inet].t0s[sCType.CBIAS]) > 0:
             self.sat_b = []
             self.lc[inet].cbias = {}
+
+        self.iodssr = v['iodssr']
+        self.uint = v['uint']
+        self.mi = v['mi']
 
         for k in range(nsat):
             i, sat_ = self.decode_sat(msg, i, sys)
@@ -739,6 +821,13 @@ class rtcm(cssr):
         if timediff(self.time, self.lc[inet].t0s[sCType.PBIAS]) > 0:
             self.sat_b = []
             self.lc[inet].pbias = {}
+            self.lc[inet].si = {}
+            self.lc[inet].cnt = {}
+
+        self.iodssr = v['iodssr']
+        self.uint = v['uint']
+        self.mi = v['mi']
+        self.iyaw = v['iyaw']
 
         for k in range(nsat):
             i, sat_ = self.decode_sat(msg, i, sys)
@@ -746,22 +835,42 @@ class rtcm(cssr):
 
             nsig = bs.unpack_from('u5', msg, i)[0]
             i += 5
-            yaw, dyaw = bs.unpack_from('u9s8', msg, i)
-            yaw *= 1.0/256.0
-            dyaw = self.sval(dyaw, 8, 1.0/8192.0)
 
-            i += 17
+            if self.subtype != sRTCM.SSR_PBIAS or \
+                    (self.subtype == sRTCM.SSR_PBIAS and v['iyaw']):
+                yaw, dyaw = bs.unpack_from('u9s8', msg, i)
+                yaw *= 1.0/256.0
+                dyaw = self.sval(dyaw, 8, 1.0/8192.0)
+                i += 17
+                self.lc[inet].yaw[sat_] = yaw
+                self.lc[inet].dyaw[sat_] = dyaw
+
             if sat_ not in self.sat_b:
                 self.sat_b.append(sat_)
             if sat_ not in self.lc[inet].pbias:
                 self.lc[inet].pbias[sat_] = {}
+                self.lc[inet].si[sat_] = {}
+                self.lc[inet].cnt[sat_] = {}
 
             for j in range(nsig):
-                sig, si, wl, ci, pb = bs.unpack_from('u5u1u2u4s20', msg, i)
-                i += 32
+                # tracking mode: DF461
+                # signal integer indicator: DF483
+                sig, si = bs.unpack_from('u5b1', msg, i)
+                i += 6
+
+                if self.subtype != sRTCM.SSR_PBIAS:
+                    wl = bs.unpack_from('u2', msg, i)[0]
+                    i += 2
+
+                # signal discontinuity indicator: DF485
+                # phase bias: DF482
+                cnt, pb = bs.unpack_from('u4s20', msg, i)
+                i += 24
 
                 rsig = self.ssig2rsig(sys, uTYP.L, sig).str()
                 self.lc[inet].pbias[sat_][rsig] = self.sval(pb, 20, 1e-4)
+                self.lc[inet].si[sat_][rsig] = si
+                self.lc[inet].cnt[sat_][rsig] = cnt
 
         self.iodssr_c[sCType.PBIAS] = v['iodssr']
         self.lc[0].cstat |= (1 << sCType.PBIAS)
@@ -778,16 +887,24 @@ class rtcm(cssr):
         self.dorb_n = np.zeros((nsat, 3))
         self.ddorb_n = np.zeros((nsat, 3))
         self.dclk_n = np.zeros(nsat)
+        self.ddclk_n = np.zeros(nsat)
+        self.dddclk_n = np.zeros(nsat)
 
         if timediff(self.time, self.lc[inet].t0s[sCType.ORBIT]) > 0:
             self.nsat_n = 0
             self.sys_n = []
             self.sat_n = []
             self.lc[inet].dclk = {}
+            self.lc[inet].ddclk = {}
+            self.lc[inet].dddclk = {}
             self.lc[inet].iode = {}
             self.lc[inet].dorb = {}
+            self.lc[inet].ddorb = {}
 
         self.iodssr = v['iodssr']
+        self.uint = v['uint']
+        self.mi = v['mi']
+
         sat = []
         for k in range(nsat):
             i, sat_ = self.decode_sat(msg, i, sys)
@@ -799,7 +916,10 @@ class rtcm(cssr):
             sat.append(sat_)
             self.lc[inet].iode[sat_] = self.iode_n[k]
             self.lc[inet].dorb[sat_] = self.dorb_n[k, :]
+            self.lc[inet].ddorb[sat_] = self.ddorb_n[k, :]
             self.lc[inet].dclk[sat_] = self.dclk_n[k]
+            self.lc[inet].ddclk[sat_] = self.ddclk_n[k]
+            self.lc[inet].dddclk[sat_] = self.dddclk_n[k]
 
         self.nsat_n += nsat
         self.sys_n += [sys]*nsat
@@ -823,6 +943,10 @@ class rtcm(cssr):
         if timediff(self.time, self.lc[inet].t0s[sCType.URA]) > 0:
             self.ura = np.zeros(self.nsat_n)
 
+        self.iodssr = v['iodssr']
+        self.uint = v['uint']
+        self.mi = v['mi']
+
         for k in range(nsat):
             i, sat_ = self.decode_sat(msg, i, sys)
             s = self.sat_n.index(sat_)
@@ -845,6 +969,10 @@ class rtcm(cssr):
 
         if timediff(self.time, self.lc[inet].t0s[sCType.HCLOCK]) > 0:
             self.lc[inet].dclk = {}
+
+        self.iodssr = v['iodssr']
+        self.uint = v['uint']
+        self.mi = v['mi']
 
         for k in range(v['nsat']):
             i, sat_ = self.decode_sat(msg, i, sys)
@@ -1008,31 +1136,55 @@ class rtcm(cssr):
 
         return False
 
-    def out_log_ssr_clk(self, sys):
+    def out_log_ssr_clk(self, sys, flg_drift=True):
         """ output ssr clock correction to log file """
-        self.fh.write(" {:s}\t{:s}\n".format("SatID", "dclk [m]"))
+        self.fh.write(f" IODSSR:{self.iodssr} ProvID:{self.pid} " +
+                      f"SolID:{self.sid}\n")
+        self.fh.write(" {:s}\t{:s}".format("SatID", "dclk [m]"))
+
+        if flg_drift:
+            self.fh.write("\t{:s}\t{:s}".format(
+                "ddclk [mm/s]", "dddclk [mm/s^2]"))
+        self.fh.write("\n")
+
         for k, sat_ in enumerate(self.lc[0].dclk.keys()):
             sys_, _ = sat2prn(sat_)
             if sys_ != sys:
                 continue
-            self.fh.write(" {:s}\t{:8.4f}\n".format(sat2id(sat_),
-                                                    self.lc[0].dclk[sat_]))
+            self.fh.write(" {:s}\t{:8.4f}".format(sat2id(sat_),
+                                                  self.lc[0].dclk[sat_]))
+            if flg_drift:
+                self.fh.write("\t{:8.4f}\t{:8.4f}".format(
+                    self.lc[0].ddclk[sat_], self.lc[0].dddclk[sat_]))
+            self.fh.write("\n")
 
-    def out_log_ssr_orb(self, sys):
+    def out_log_ssr_orb(self, sys, flg_vel=True):
         """ output ssr orbit correction to log file """
-        self.fh.write(" {:s}\t{:s}\t{:s}\t{:s}\t{:s}\n"
-                      .format("SatID", "IODE", "Radial[m]",
-                              "Along[m]", "Cross[m]"))
+        self.fh.write(f" IODSSR:{self.iodssr} ProvID:{self.pid} " +
+                      f"SolID:{self.sid}\n")
+        self.fh.write(f" Reference Datum: {self.datum}\n")
+        self.fh.write(" {:s}\t{:s}\t{:s}\t{:s}\t{:s}"
+                      .format("SatID", "IODE", "R[m]", "A[m]", "C[m]"))
+        if flg_vel:
+            self.fh.write("\t{:s}\t{:s}\t{:s}".format("dR[mm/s]",
+                                                      "dA[mm/s]", "dC[mm/s]"))
+        self.fh.write("\n")
         for k, sat_ in enumerate(self.lc[0].dorb.keys()):
             sys_, _ = sat2prn(sat_)
             if sys_ != sys:
                 continue
-            self.fh.write(" {:s}\t{:3d}\t{:6.3f}\t{:6.3f}\t{:6.3f}\n".
+            self.fh.write(" {:s}\t{:3d}\t{:7.4f}\t{:7.4f}\t{:7.4f}".
                           format(sat2id(sat_),
                                  self.lc[0].iode[sat_],
                                  self.lc[0].dorb[sat_][0],
                                  self.lc[0].dorb[sat_][1],
                                  self.lc[0].dorb[sat_][2]))
+            if flg_vel:
+                self.fh.write("\t{:7.4f}\t{:7.4f}\t{:7.4f}".
+                              format(self.lc[0].ddorb[sat_][0]*1e3,
+                                     self.lc[0].ddorb[sat_][1]*1e3,
+                                     self.lc[0].ddorb[sat_][2]*1e3))
+            self.fh.write("\n")
 
     def out_log(self, obs=None, eph=None, geph=None, seph=None):
         """ output ssr message to log file """
@@ -1040,6 +1192,11 @@ class rtcm(cssr):
         inet = self.inet
         self.fh.write("{:4d}\t{:s}\n".format(self.msgtype,
                                              time2str(self.time)))
+
+        if self.subtype not in [sRTCM.SSR_META, sRTCM.SSR_GRID]:
+            self.fh.write(f" Update Interval: {self.udint_t[self.uint]}[s]")
+
+        self.fh.write(f" MultiMsg: {self.mi}\n")
 
         if self.subtype == sCSSR.CLOCK:
             self.out_log_ssr_clk(sys)
@@ -1051,30 +1208,105 @@ class rtcm(cssr):
             self.out_log_ssr_clk(sys)
             self.out_log_ssr_orb(sys)
 
-        if self.subtype == sCSSR.CBIAS or self.subtype == sCSSR.BIAS:
+        if self.subtype == sRTCM.SSR_META:
+            self.fh.write(f" ProvID:{self.pid} SolID:{self.sid} " +
+                          f"NumEnt:{self.nm}\n")
+
+        if self.subtype == sRTCM.SSR_TROP:
+            self.fh.write(f" IODSSR:{self.iodssr} ProvID:{self.pid} " +
+                          f"SolID:{self.sid} GridID:{self.gid}\n")
+            self.fh.write(f" Residiaul Model Indicator: {self.rmi}\n")
+            if self.rmi:
+                trop = self.lc[inet].trop
+                self.fh.write(f" a(d/w): {trop.ah:7.4f}  {trop.aw:7.4f}\n")
+                self.fh.write(f" b(d/w): {trop.bh:7.4f}  {trop.bw:7.4f}\n")
+                self.fh.write(f" c(d/w): {trop.ch:7.4f}  {trop.cw:7.4f}\n")
+                self.fh.write(f" ofst(d/w)[m]: {trop.ofsth:7.4f}"
+                              + f" {trop.ofstw:7.4f}\n")
+                self.fh.write(f" ge(d/w)[mm/deg]: {trop.geh*1e3:7.4f}"
+                              + f" {trop.gew*1e3:7.4f}\n")
+                self.fh.write(f" gn(d/w)[mm/deg]: {trop.gnh*1e3:7.4f}"
+                              + f" {trop.gnw*1e3:7.4f}\n")
+
+            ngp = trop.rh.shape[0]
+            for k in range(ngp):
+                self.fh.write(f" res(d/w)[m] {trop.rh[k]:7.4f}" +
+                              f" {trop.rw[k]:7.4f}\n")
+
+        if self.subtype == sRTCM.SSR_STEC:
+            self.fh.write(f" IODSSR:{self.iodssr} ProvID:{self.pid} " +
+                          f"SolID:{self.sid} GridID:{self.gid}\n")
+            self.fh.write(f" Polynomial[TECU]: {self.pmi} (Grad:{self.pgi})\n")
+            if self.pmi:
+                for sat in self.lc[inet].sat_n:
+                    self.fh.write(f"  {sat2id(sat):s}")
+                    ci = self.lc[inet].ci[sat]
+                    self.fh.write(f" C00 {ci[0]:7.4f}")
+                    if self.pgi:
+                        self.fh.write(f" C01 {ci[1]:7.4f} C10 {ci[2]:7.4f}")
+                    self.fh.write("\n")
+            self.fh.write(f" Residual[TECU]: {self.rmi}\n")
+            if self.rmi:
+                for sat in self.lc[inet].sat_n:
+                    self.fh.write(f"  {sat2id(sat):s}")
+                    stec = self.lc[inet].stec[sat]
+                    ngp = len(stec)
+                    for k in range(ngp):
+                        self.fh.write(f" {stec[k]:7.4f}")
+                    self.fh.write("\n")
+
+        if self.subtype == sRTCM.SSR_GRID:
+            self.fh.write(f" ProvID:{self.pid} GridID:{self.gid}" +
+                          f" GridType:{self.gtype} Ofst:{self.ofst}\n")
+            self.fh.write(" RefPos:{:6.3f} {:6.3f} {:6.3f}\n"
+                          .format(self.pos0[0], self.pos0[1], self.pos0[2]))
+            ng = self.dpos.shape[0]
+            for k in range(ng):
+                self.fh.write(" dpos: {:6.3f} {:6.3f} {:9.3f}\n".format(
+                    self.dpos[k][0], self.dpos[k][1], self.dpos[k][2]))
+
+        if self.subtype in [sCSSR.CBIAS, sCSSR.BIAS]:
+            self.fh.write(f" IODSSR:{self.iodssr} ProvID:{self.pid} " +
+                          f"SolID:{self.sid}\n")
             self.fh.write(" {:s}\t{:s}\t{:s}\t{:s}\n"
                           .format("SatID", "SigID", "CBias[m]", "..."))
-            for k, sat_ in enumerate(self.lc[inet].cbias.keys()):
+            for k, sat_ in enumerate(self.lc[0].cbias.keys()):
                 sys_, _ = sat2prn(sat_)
                 if sys_ != sys:
                     continue
                 self.fh.write(" {:s}\t".format(sat2id(sat_)))
-                for sig in self.lc[inet].cbias[sat_].keys():
+                for sig in self.lc[0].cbias[sat_].keys():
                     self.fh.write("{:s}\t{:5.2f}\t"
-                                  .format(sig, self.lc[inet].cbias[sat_][sig]))
+                                  .format(sig, self.lc[0].cbias[sat_][sig]))
                 self.fh.write("\n")
 
-        if self.subtype == sCSSR.PBIAS or self.subtype == sCSSR.BIAS:
-            self.fh.write(" {:s}\t{:s}\t{:s}\t{:s}\n"
-                          .format("SatID", "SigID", "PBias[m]", "..."))
-            for k, sat_ in enumerate(self.lc[inet].pbias.keys()):
+        if self.subtype in [sCSSR.PBIAS, sCSSR.BIAS, sRTCM.SSR_PBIAS]:
+            self.fh.write(f" IODSSR:{self.iodssr} ProvID:{self.pid} " +
+                          f"SolID: {self.sid}\n")
+            self.fh.write(f" ExtPB ID: {self.iexpb} Yaw: {self.iyaw}\n")
+
+            self.fh.write(" {:s}".format("SatID"))
+            if self.iyaw:
+                self.fh.write("\t{:s}\t{:s}".format("Yaw", "dYaw"))
+
+            self.fh.write("\t{:s}\t{:s}\t{:s}\t{:s}\t{:s}\n"
+                          .format("SigID", "PBias[m]", "i", "cnt", "..."))
+            for k, sat_ in enumerate(self.lc[0].pbias.keys()):
                 sys_, _ = sat2prn(sat_)
                 if sys_ != sys:
                     continue
                 self.fh.write(" {:s}\t".format(sat2id(sat_)))
-                for sig in self.lc[inet].pbias[sat_].keys():
-                    self.fh.write("{:s}\t{:5.2f}\t"
-                                  .format(sig, self.lc[inet].pbias[sat_][sig]))
+
+                if self.iyaw:
+                    self.fh.write("\t{:7.4f}\t{:7.4f}\t"
+                                  .format(self.lc[0].yaw[sat_],
+                                          self.lc[0].dyaw[sat_]))
+
+                for sig in self.lc[0].pbias[sat_].keys():
+                    self.fh.write("{:s}\t{:7.4f}\t{:1d}\t{:2d}\t"
+                                  .format(sig, self.lc[0].pbias[sat_][sig],
+                                          self.lc[0].si[sat_][sig],
+                                          self.lc[0].cnt[sat_][sig]))
                 self.fh.write("\n")
 
         if self.subtype == sRTCM.ANT_DESC:
@@ -1245,7 +1477,13 @@ class rtcm(cssr):
         svmask, sigmask = bs.unpack_from('u64u32', msg, i)
         i += 96
 
-        ofst = 193 if sys == uGNSS.QZS else 1
+        if sys == uGNSS.QZS:
+            ofst = 193
+        elif sys == uGNSS.SBS:
+            ofst = 120
+        else:
+            ofst = 1
+
         prn, self.nsat = self.decode_mask(svmask, 64, ofst)
         sig, self.nsig = self.decode_mask(sigmask, 32)
         sz = self.nsat*self.nsig
@@ -1891,6 +2129,324 @@ class rtcm(cssr):
         ic = i//8
         self.ustr = bytes(msg[ic:ic+ncp]).decode()
 
+    def decode_ssr_metadata(self, msg, i):
+        """ decode SSR Metadata Message """
+        # nm: nomber of ssr model/correction entries
+        iodssr, pid, sid, nm = bs.unpack_from('u4u16u4u5', msg, i)
+        i += 29
+
+        self.iodssr = iodssr
+        self.pid = pid
+        self.sid = sid
+        self.nm = nm  # number of entries
+
+        if nm == 0:  # no metadata
+            i += 7
+            return i
+
+        mpi = 0
+        # Model/Correction Part
+
+        # Model/Correction Type Indicator: DF+64
+        # Model/Correction Application Indicator: MT+65
+        # Non-Default Model/Correction Indicator: MT+66
+        mt, ap, mi = bs.unpack_from('u5u1b1', msg, i)
+        i += 7
+        if mi:
+            mci = bs.unpack_from('u3', msg, i)[0]  # model/correction id
+            i += 3
+        iodmi = bs.unpack_from('b1', msg, i)[0]
+        i += 1
+        if iodmi:
+            iodm = bs.unpack_from('u6', msg, i)[0]
+            i += 6
+        if mi:
+            mpi = bs.unpack_from('b1', msg, i)[0]
+            i += 1
+        if mpi:
+            nb = bs.unpack_from('u8', msg, i)[0]
+            i += 8
+        if mi and mpi:
+            data = bs.unpack_from('u'+str(nb), msg, i)[0]
+            i += nb
+
+        if mt == 7:  # GNSS BE Reference
+            gnss, be = bs.unpack_from('u4u4', msg, i)
+            i += 8
+
+        return i
+
+    def decode_ssr_satant(self, sys, msg, i):
+        """ decode GNSS Satellite Antenna Message (E80,81,82,83,84) """
+        pid, iods, pci, gdi, ndi = bs.unpack_from('u16u6b1b1b1', msg, i)
+        i += 25
+        if ndi:
+            nmas, nde = bs.unpack_from('u5u4', msg, i)
+            i += 9
+        ssi, satmask = bs.unpack_from('u1u64', msg, i)
+        i += 65
+
+        prn, nsat = self.decode_mask(satmask, 64, 1)
+        for k in range(nsat):
+            fsi, freqmask = bs.unpack_from('u1u6', msg, i)
+            i += 7
+            freq, nf = self.decode_mask(freqmask, 6, 0)
+            for j in range(nf):
+                nci = bs.unpack_from('b1', msg, i)[0]
+                i += 1
+                if nci:
+                    nc = bs.unpack_from('s12', msg, i)[0]
+                    i += 12
+                if ndi:
+                    ndc = bs.unpack_from('s'+str(3+nde), msg, i)[0]
+                    i += 3+nde
+        return i
+
+    def decode_ssr_grid(self, msg, i):
+        """ decode SSR Grid Definition Message (E61) """
+        self.pid, self.mi, gid, gtype = bs.unpack_from('u16u1u10u3', msg, i)
+        i += 30
+
+        self.gid = gid
+        self.gtype = gtype
+        self.inet = gid
+
+        # """load grid coordinates from file """
+        dtype0 = [('nid', 'i4'), ('gid', 'i4'),
+                  ('lat', 'f8'), ('lon', 'f8'), ('alt', 'f8')]
+
+        if gtype == 0:  # grid type 0
+            lat0, lon0, alt0, ofst, npnt = bs.unpack_from(
+                's18s19u10u12u8', msg, i)
+            i += 67
+
+            lat = self.sval(lat0, 18, 1e-3)
+            lon = self.sval(lon0, 19, 1e-3)
+            alt = self.sval(alt0, 10, 12.5)-1000.0
+            self.grid = np.array([(gid, ofst, lat, lon, alt)], dtype=dtype0)
+            self.dpos = np.zeros((npnt, 3))
+            self.pos0 = np.array([lat, lon, alt])
+            self.ofst = ofst
+
+            for k in range(ofst, ofst+npnt):
+                dlat, dlon, dalt = bs.unpack_from('s13s14s9', msg, i)
+                i += 36
+                lat += self.sval(dlat, 13, 1e-3)
+                lon += self.sval(dlon, 14, 1e-3)
+                alt += self.sval(dalt, 9, 12.5)
+                d = np.array([(gid, k+1, lat, lon, alt)], dtype=dtype0)
+                self.grid = np.append(self.grid, d)
+                self.dpos[k-ofst, :] = (dlat*1e-3, dlon*1e-3, dalt*12.5)
+
+        elif gtype == 1:  # grid type 1
+            lat0, lon0, ofst, npnt = bs.unpack_from('s18s19u12u8', msg, i)
+            i += 57
+            lat = self.sval(lat0, 18, 1e-3)
+            lon = self.sval(lon0, 19, 1e-3)
+            self.grid = np.array([], dtype=dtype0)
+            for k in range(npnt):
+                dlat, dlon = bs.unpack_from('s13s14', msg, i)
+                i += 27
+                lat += self.sval(dlat, 13, 1e-3)
+                lon += self.sval(dlon, 14, 1e-3)
+                d = np.array([(gid, k, lat, lon, 0)], dtype=dtype0)
+                self.grid = np.append(self.grid, d)
+
+        elif gtype == 2:  # grid type 2
+            lat0_, lon0_, nrow, ncol, dlat_, dlon_, gma = bs.unpack_from(
+                's18s19u6u6u9u10b1', msg, i)
+            i += 69
+            lat0 = self.sval(lat0_, 18, 1e-3)
+            lon0 = self.sval(lon0_, 19, 1e-3)
+            dlat = self.sval(dlat_, 9, 0.01)
+            dlon = self.sval(dlon_, 10, 0.01)
+            self.grid = np.array()
+
+            if gma:
+                latmask = bs.unpack_from('u'+str(nrow), msg, i)[0]
+                i += nrow
+                lonmask = bs.unpack_from('u'+str(ncol), msg, i)[0]
+                i += ncol
+
+                ilat, nlat = self.decode_mask(latmask, nrow, 0)
+                ilon, nlon = self.decode_mask(lonmask, ncol, 0)
+                n = nlat*nlon
+                egpmask = bs.unpack_from('u'+str(n), msg, i)[0]
+                i += n
+                iex, nex = self.decode_mask(egpmask, n, 0)
+            else:
+                iex = []
+
+            ii = ofst
+            self.grid = np.array([], dtype=dtype0)
+            for j in range(ncol):
+                for k in range(nrow):
+                    lat = lat0 + dlat*j
+                    lon = lon0 + dlon*k
+                    idx = nrow*j+k
+                    if gma and idx not in iex:
+                        continue
+                    d = np.array([(gid, ii, lat, lon, 0)], dtype=dtype0)
+                    self.grid = np.append(self.grid, d)
+                    ii += 1
+
+        return i
+
+    def decode_ssr_pbias_ex(self, msg, i):
+        """ decode SSR Extended Satellite Phase Bias Message """
+
+        """
+        - linked with Phase bias messages with epoch time for given GNSS and
+            id (DF+002).
+        - widelane signal group indicator (DF484) shall be repeated for
+            every satellite and signal in corresponding phase bias message.
+        - the message shall be sent before corresponding phase bias message.
+
+        - DF484:
+            00 - no widelane group information for this signal
+            10 - signal belongs to group one of widelane combinations
+                 with integer property
+
+        """
+        sys = self.get_ssr_sys(self.msgtype)
+        i, v = self.decode_head(msg, i, sys)
+
+        nsig = 0  # TBD
+
+        # Extended Phase Bias Property ID
+        self.eid = bs.unpack_from('u4', msg, i)[0]  # DF+002
+        i += 4
+        self.lc[0].wl = np.zeros(nsig)
+        for j in range(nsig):
+            self.lc[0].wl[j] = bs.unpack_from('u2', msg, i)[0]
+            i += 2
+        return i
+
+    def decode_ssr_trop(self, msg, i, inet=0):
+        """ decode SSR Tropspheric Correction Message """
+        tow, uint, mi = bs.unpack_from('u20u4u1', msg, i)
+        i += 25
+        iodssr, pid, sid = bs.unpack_from('u4u16u4', msg, i)
+        i += 24
+        gid, rmi = bs.unpack_from('u10b1', msg, i)
+        i += 11
+
+        # atmospheric model part
+        dah, dbh, dch, daw, dbw, dcw = bs.unpack_from(
+            's11s9s9s13s6s5', msg, i)
+        i += 53
+        ofsth, geh, gnh = bs.unpack_from('s13s15s15', msg, i)
+        i += 43
+        ofstw, gew, gnw = bs.unpack_from('s13s15s15', msg, i)
+        i += 43
+
+        inet = gid
+
+        trop = TropModel()
+        # mapping function for  hydrostatic/wet term
+
+        trop.ah = self.sval(dah, 11, 2.5e-7)+0.00118
+        trop.bh = self.sval(dbh, 9, 5e-6)+0.00298
+        trop.ch = self.sval(dch, 9, 2e-4)+0.0682
+        trop.aw = self.sval(daw, 13, 1e-6)+0.000104
+        trop.bw = self.sval(dbw, 6, 2.5e-5)+0.0015
+        trop.cw = self.sval(dcw, 5, 2e-3)+0.048
+        trop.aht = 2.53e-5
+        trop.bht = 5.49e-3
+        trop.cht = 1.14e-3
+
+        # hydrostatic
+        trop.ofsth = ofsth*0.1e-3+2.3  # offset [m]
+        trop.geh = geh*0.01e-3  # west-east gradient [m/deg]
+        trop.gnh = gnh*0.01e-3  # south-north gradient [m/deg]
+        # wet
+        trop.ofstw = ofstw*0.1e-3+0.252  # offset [m]
+        trop.gew = gew*0.1e-3  # west-east gradient [m/deg]
+        trop.gnw = gnw*0.01e-3  # south-north gradient [m/deg]
+
+        if rmi:  # residual information part
+            ofstg, ngp, n, m = bs.unpack_from('u12u12u4u4', msg, i)
+            i += 32
+            trop.rh = np.zeros(ofstg+ngp)
+            trop.rw = np.zeros(ofstg+ngp)
+
+            for k in range(ofstg, ofstg+ngp):
+                rh, rw = bs.unpack_from(f's{n}s{m}', msg, i)
+                i += n+m
+                # hydrostatic grid point residual [m]
+                trop.rh[k] = self.sval(rh, n, 0.1e-3)
+                # wet grid point residual [m]
+                trop.rw[k] = self.sval(rw, m, 0.1e-3)
+
+        self.lc[inet].trop = trop
+
+        self.iodssr = iodssr
+        self.rmi = rmi
+        return i
+
+    def decode_ssr_iono(self, msg, i, inet=0):
+        """ decode SSR Regional Ionospheric Correction message (E96,E97,E98,E99,E100) """
+        sys = self.get_ssr_sys(self.msgtype)
+        i, v = self.decode_head(msg, i, sys)
+        # Grid ID DF+22
+        # Polynomial Model Indicator DF+96
+        # Residual Model Indicator
+        gid, pmi, rmi, satmask = bs.unpack_from('u10b1b1u64', msg, i)
+        i += 76
+        # Zenith-mapped STEC Polynomial Gradient Indicator DF+60
+        svid, nsat = self.decode_mask(satmask, 64, 1)
+        sat = np.zeros(nsat, dtype=int)
+        for k in range(nsat):
+            # sat[k] = self.svid2sat(sys, svid[k], True)
+            sat[k] = self.svid2sat(sys, svid[k])
+
+        inet = gid
+        self.lc[inet].sat_n = sat
+
+        if pmi:  # polynomial model information part
+            self.pgi = bs.unpack_from('b1', msg, i)[0]
+            i += 1
+            sz = 3 if self.pgi else 1
+            self.lc[inet].ci = {}
+            for k in range(nsat):
+                sat_ = sat[k]
+                self.lc[inet].ci[sat_] = np.zeros(sz)
+                c00 = bs.unpack_from('s17', msg, i)[0]
+                i += 17
+                self.lc[inet].ci[sat_][0] = self.sval(c00, 17, 0.01)
+                if self.pgi:  # polynomial grandient indicator is true
+                    c01, c10 = bs.unpack_from('s18s18', msg, i)
+                    i += 36
+                    self.lc[inet].ci[sat_][1] = self.sval(c01, 18, 1e-3)
+                    self.lc[inet].ci[sat_][2] = self.sval(c10, 18, 1e-3)
+
+        if rmi:  # residual model information part
+            ofst, ng, rlen = bs.unpack_from('u12u12u5', msg, i)
+            i += 29
+            if rlen > 0:
+                # Zenith-mapped STEC Grid Point Residual
+                # Resolution Scale Factor Exponent
+                sf = bs.unpack_from('u3', msg, i)[0]  # DF+073
+                i += 3
+
+            self.lc[inet].stec = {}
+            fmt = 's'+str(rlen)
+
+            for k in range(nsat):
+                sat_ = sat[k]
+                self.lc[inet].stec[sat_] = np.zeros(ofst+ng)
+                for j in range(ofst, ofst+ng):
+                    res = bs.unpack_from(fmt, msg, i)[0]  # DF+062
+                    i += rlen
+                    scl = 1e-3*(2**sf)
+                    self.lc[inet].stec[sat_][j] = self.sval(res, rlen, scl)
+
+        self.gid = gid
+        self.pmi = pmi
+        self.rmi = rmi
+
+        return i
+
     def decode_integrity_min(self, msg, i):
         """ RTCM SC-134 minimum integrity message (MT3) """
 
@@ -1962,22 +2518,23 @@ class rtcm(cssr):
                 sig_msts[sys][sat] = bs.unpack_from('u32', msg, i)[0]
                 i += 32
 
-        self.integ.pid = pid
-        self.integ.tow = tow
+            self.integ.pid = pid
+            self.integ.tow = tow
 
-        self.integ.iod_sys = iod_sys
-        self.integ.sts = sts_tbl
-        self.integ.mst = mst_tbl
-        self.integ.src = src_tbl
+            self.integ.iod_sys = iod_sys
+            self.integ.sts = sts_tbl
+            self.integ.mst = mst_tbl
+            self.integ.src = src_tbl
 
-        self.integ.sigmask = sigmask
-        self.integ.iod_sig = iod_sig
-        self.integ.sig_ists = sig_ists
-        self.integ.sig_msts = sig_msts
+            self.integ.sigmask = sigmask
+            self.integ.iod_sig = iod_sig
+            self.integ.sig_ists = sig_ists
+            self.integ.sig_msts = sig_msts
+        return i
 
     def decode_integrity_ext(self, msg, i):
         """ RTCM SC-134 extended integrity message
-            service levels and overbounding parameters (MT4) """
+        service levels and overbounding parameters (MT4) """
 
         # GPS Epoch Time (TOW) DFi008
         # augmentation service provider id DFi027
@@ -2126,10 +2683,11 @@ class rtcm(cssr):
                 self.integ.ob_p[sys][sat] = ob_p
                 self.integ.sig_ob_c[sys][sat] = sig_ob_c
                 self.integ.ob_c[sys][sat] = ob_c
+        return i
 
     def decode_integrity_ext_sis_local(self, msg, i):
         """ RTCM SC-134 extended integrity message
-            signal in space integrity and local error parameters (MT5) """
+        signal in space integrity and local error parameters (MT5) """
 
         # integrity parameter IOD DFi006
         # augmentation service provider id DFi027
@@ -2142,7 +2700,8 @@ class rtcm(cssr):
         # update rate interval DFi067 (0.1)
         # Validity Area Type DFi056
         # Time correlation integrity/continuity flag DFi137
-        mask_sys, vp, uri, atype, fc = bs.unpack_from('u16u4u16u2u1', msg, i)
+        mask_sys, vp, uri, atype, fc = bs.unpack_from(
+            'u16u4u16u2u1', msg, i)
         i += 39
 
         sys_t, nsys = self.decode_mask(mask_sys, 16, ofst=0)
@@ -2178,62 +2737,63 @@ class rtcm(cssr):
 
             self.integ.pnt_vr = [x, y, z, vr]
 
-        for sys_ in sys_t:
-            sys = self.integ.sys_tbl[sys_]
+            for sys_ in sys_t:
+                sys = self.integ.sys_tbl[sys_]
 
-            # GNSS satellite mask DFi009
-            # issue of GNSS satellite mask DFi010
-            mask_sat, iod_mask = bs.unpack_from('u64u2', msg, i)
-            i += 66
+                # GNSS satellite mask DFi009
+                # issue of GNSS satellite mask DFi010
+                mask_sat, iod_mask = bs.unpack_from('u64u2', msg, i)
+                i += 66
 
-            svid_t, nsat = self.decode_mask(mask_sat, 64)
+                svid_t, nsat = self.decode_mask(mask_sat, 64)
 
-            self.integ.idx_c[sys] = {}
-            self.integ.idx_p[sys] = {}
-            self.integ.cbr[sys] = {}
-            self.integ.sig_dp[sys] = {}
-            self.integ.idx_dp[sys] = {}
+                self.integ.idx_c[sys] = {}
+                self.integ.idx_p[sys] = {}
+                self.integ.cbr[sys] = {}
+                self.integ.sig_dp[sys] = {}
+                self.integ.idx_dp[sys] = {}
 
-            self.integ.oc[sys] = {}
-            self.integ.sig_ion[sys] = {}
-            self.integ.idx_ion[sys] = {}
-            self.integ.sig_trp[sys] = {}
-            self.integ.idx_trp[sys] = {}
+                self.integ.oc[sys] = {}
+                self.integ.sig_ion[sys] = {}
+                self.integ.idx_ion[sys] = {}
+                self.integ.sig_trp[sys] = {}
+                self.integ.idx_trp[sys] = {}
 
-            for svid in svid_t:
-                ofst = 192 if sys == uGNSS.QZS else 0
-                prn = svid+ofst
-                sat = prn2sat(sys, prn)
+                for svid in svid_t:
+                    ofst = 192 if sys == uGNSS.QZS else 0
+                    prn = svid+ofst
+                    sat = prn2sat(sys, prn)
 
-                # Pseudorange error rate integrity index DFi120
-                # Phase error rate integrity index DFi121
-                # Nominal pseudorange bias rate of change DFi125
-                # Bounding sigma on phase-range-rate error DFi122
-                # Phase-range-rate error rate integrity index DFi123
-                idx_c, idx_p, cbr, sig_dp, idx_dp = bs.unpack_from(
-                    'u4u4u3u4u4', msg, i)
-                i += 19
+                    # Pseudorange error rate integrity index DFi120
+                    # Phase error rate integrity index DFi121
+                    # Nominal pseudorange bias rate of change DFi125
+                    # Bounding sigma on phase-range-rate error DFi122
+                    # Phase-range-rate error rate integrity index DFi123
+                    idx_c, idx_p, cbr, sig_dp, idx_dp = bs.unpack_from(
+                        'u4u4u3u4u4', msg, i)
+                    i += 19
 
-                # Orbit and clock error rate integrity parameter DFi127
-                # Residual ionospheric error standard deviation DFi128
-                # Index of bounding parameter on change in iono error DFi129
-                # Residual tropospheric error standard deviation DFi130
-                # Index of bounding parameter on change in tropo error DFi131
-                oc, sig_ion, idx_ion, sig_trp, idx_trp = bs.unpack_from(
-                    'u3u3u3u3u3', msg, i)
-                i += 15
+                    # Orbit and clock error rate integrity parameter DFi127
+                    # Residual ionospheric error standard deviation DFi128
+                    # Index of bounding parameter on change in iono error DFi129
+                    # Residual tropospheric error standard deviation DFi130
+                    # Index of bounding parameter on change in tropo error DFi131
+                    oc, sig_ion, idx_ion, sig_trp, idx_trp = bs.unpack_from(
+                        'u3u3u3u3u3', msg, i)
+                    i += 15
 
-                self.integ.idx_c[sys][sat] = idx_c
-                self.integ.idx_p[sys][sat] = idx_p
-                self.integ.cbr[sys][sat] = cbr
-                self.integ.sig_dp[sys][sat] = sig_dp
-                self.integ.idx_dp[sys][sat] = idx_dp
+                    self.integ.idx_c[sys][sat] = idx_c
+                    self.integ.idx_p[sys][sat] = idx_p
+                    self.integ.cbr[sys][sat] = cbr
+                    self.integ.sig_dp[sys][sat] = sig_dp
+                    self.integ.idx_dp[sys][sat] = idx_dp
 
-                self.integ.oc[sys][sat] = oc
-                self.integ.sig_ion[sys][sat] = sig_ion
-                self.integ.idx_ion[sys][sat] = idx_ion
-                self.integ.sig_trp[sys][sat] = sig_trp
-                self.integ.idx_trp[sys][sat] = idx_trp
+                    self.integ.oc[sys][sat] = oc
+                    self.integ.sig_ion[sys][sat] = sig_ion
+                    self.integ.idx_ion[sys][sat] = idx_ion
+                    self.integ.sig_trp[sys][sat] = sig_trp
+                    self.integ.idx_trp[sys][sat] = idx_trp
+        return i
 
     def decode_integrity_ext_service_area(self, msg, i):
         """ RTCM SC-134 Extended Service Area Parameters (MT6) """
@@ -2242,14 +2802,16 @@ class rtcm(cssr):
         # augmentation service provider id DFi027
         # GPS Epoch Time (TOW) DFi008
         # augmentation integrity level DFi026
-        iod_sa, tow, pid, alvl = bs.unpack_from('u6u30u12u4', msg, i)
+        iod_sa, tow, pid, alvl = bs.unpack_from(
+            'u6u30u12u4', msg, i)
         i += 52
 
         # GNSS Constellation Mask DFi013
         # Validity Period DFi065 (0-15)
         # update rate interval DFi067 (0.1)
         # Validity Area Type DFi056
-        mask_sys, vp, uri, atype = bs.unpack_from('u16u4u16u2', msg, i)
+        mask_sys, vp, uri, atype = bs.unpack_from(
+            'u16u4u16u2', msg, i)
         i += 38
 
         sys_t, nsys = self.decode_mask(mask_sys, 16, ofst=0)
@@ -2297,6 +2859,7 @@ class rtcm(cssr):
             x, y, z, vr = bs.unpack_from('s34s34s34u20', msg, i)
             i += 122
             self.integ.pnt_vr = [x, y, z, vr]
+        return i
 
     def decode_integrity_quality(self, msg, i):
         """ RTCM SC-134 Message Quality Indicator (MT7) """
@@ -2325,6 +2888,7 @@ class rtcm(cssr):
         for k in range(np):
             self.integ.qi[k] = bs.unpack_from('u8', msg, i)[0]
             i += 8
+        return i
 
     def decode_integrity_cnr_acg(self, msg, i):
         """ RTCM SC-134 CNR/ACG Signal In Space Monitoring Message (MT8) """
@@ -2352,54 +2916,56 @@ class rtcm(cssr):
 
             self.integ.pos[k, :] = [lat, lon, alt]
 
-            # Constellation Mask DFi013
-            # GNSS Satellite Mask DFi009
-            # Issue of GNSS Satellite Mask DFi010
-            mask_c, mask_s, iod_sat = bs.unpack_from('u16u64u2', msg, i)
-            i += 82
+        # Constellation Mask DFi013
+        # GNSS Satellite Mask DFi009
+        # Issue of GNSS Satellite Mask DFi010
+        mask_c, mask_s, iod_sat = bs.unpack_from(
+            'u16u64u2', msg, i)
+        i += 82
 
-            self.integ.iod_sat[k] = iod_sat
+        self.integ.iod_sat[k] = iod_sat
 
-            sys_t, nsys = self.decode_mask(mask_c, 16, ofst=0)
-            svid_t, nsat = self.decode_mask(mask_s, 64)
+        sys_t, nsys = self.decode_mask(mask_c, 16, ofst=0)
+        svid_t, nsat = self.decode_mask(mask_s, 64)
 
-            for sys in sys_t:
-                self.integ.band[sys] = {}
-                self.integ.cnr[sys] = {}
-                self.integ.agc[sys] = {}
+        for sys in sys_t:
+            self.integ.band[sys] = {}
+            self.integ.cnr[sys] = {}
+            self.integ.agc[sys] = {}
 
-                for svid in svid_t:
-                    ofst = 192 if sys == uGNSS.QZS else 0
-                    prn = svid+ofst
-                    sat = prn2sat(sys, prn)
+            for svid in svid_t:
+                ofst = 192 if sys == uGNSS.QZS else 0
+                prn = svid+ofst
+                sat = prn2sat(sys, prn)
 
-                    # GNSS Signal Mask DFi033
-                    # Issue of GNSS Signal Mask DFi012
-                    mask_sig, iod_sig = bs.unpack_from('u32u2', msg, i)
-                    i += 34
-                    sig_t, nsig = self.decode_mask(mask_sig, 32, ofst=0)
+                # GNSS Signal Mask DFi033
+                # Issue of GNSS Signal Mask DFi012
+                mask_sig, iod_sig = bs.unpack_from('u32u2', msg, i)
+                i += 34
+                sig_t, nsig = self.decode_mask(mask_sig, 32, ofst=0)
 
-                    self.integ.band[sys][sat] = np.zeros(nsig)
-                    self.integ.cnr[sys][sat] = np.zeros(nsig)
-                    self.integ.agc[sys][sat] = np.zeros(nsig)
+                self.integ.band[sys][sat] = np.zeros(nsig)
+                self.integ.cnr[sys][sat] = np.zeros(nsig)
+                self.integ.agc[sys][sat] = np.zeros(nsig)
 
-                    for sig in sig_t:
-                        # Frequency band ID DFi135
-                        band = bs.unpack_from('u5', msg, i)[0]
-                        i += 5
-                        self.integ.band[sys][sat][sig] = band
+                for sig in sig_t:
+                    # Frequency band ID DFi135
+                    band = bs.unpack_from('u5', msg, i)[0]
+                    i += 5
+                    self.integ.band[sys][sat][sig] = band
 
-                    for sig in sig_t:
-                        # CNR carrier to noise ratio DFi133
-                        cnr = bs.unpack_from('u8', msg, i)[0]
-                        i += 8
-                        self.integ.cnr[sys][sat][sig] = cnr
+                for sig in sig_t:
+                    # CNR carrier to noise ratio DFi133
+                    cnr = bs.unpack_from('u8', msg, i)[0]
+                    i += 8
+                    self.integ.cnr[sys][sat][sig] = cnr
 
-                    for sig in sig_t:
-                        # AGC, Automatic Gain Control DFi134
-                        agc = bs.unpack_from('u8', msg, i)[0]
-                        i += 8
-                        self.integ.agc[sys][sat][sig] = agc
+                for sig in sig_t:
+                    # AGC, Automatic Gain Control DFi134
+                    agc = bs.unpack_from('u8', msg, i)[0]
+                    i += 8
+                    self.integ.agc[sys][sat][sig] = agc
+        return i
 
     def decode_integrity_vmap(self, msg, i):
         """ RTCM SC-134 Satellite Visibility Map Message (MT9) """
@@ -2430,16 +2996,16 @@ class rtcm(cssr):
 
             self.integ.pos[k, :] = [lat*1.1e-8, lon*1.1e-8, alt]
 
-        self.integ.azel = np.zeros((naz, 2))
+            self.integ.azel = np.zeros((naz, 2))
 
-        # Azimuth DFi206
-        # Elevation Mask DFi208
-        az = 0
-        for k in range(naz):
-            daz, mask_el = bs.unpack_from('u9u7', msg, i)
-            i += 16
-            az += daz
-            self.integ.azel[k, :] = [az, mask_el]
+            # Azimuth DFi206
+            # Elevation Mask DFi208
+            az = 0
+            for k in range(naz):
+                daz, mask_el = bs.unpack_from('u9u7', msg, i)
+                i += 16
+                az += daz
+                self.integ.azel[k, :] = [az, mask_el]
 
         return i
 
@@ -2453,83 +3019,84 @@ class rtcm(cssr):
             self.ver = rev
             self.wg = wg-1
 
-        # GPS Epoch Time (TOW) DFi008
-        # number of area points DFi201
-        # multipath model ID DFi209: 0:GMM,1:MBM,2:JM
-        tow, narea, mm_id, mcf = bs.unpack_from('u30u8u3u1', msg, i)
-        i += 42
-        tow *= 1e-3
-        self.integ.pos = np.zeros((narea, 3))
-        self.integ.mm_id = mm_id
+            # GPS Epoch Time (TOW) DFi008
+            # number of area points DFi201
+            # multipath model ID DFi209: 0:GMM,1:MBM,2:JM
+            tow, narea, mm_id, mcf = bs.unpack_from(
+                'u30u8u3u1', msg, i)
+            i += 42
+            tow *= 1e-3
+            self.integ.pos = np.zeros((narea, 3))
+            self.integ.mm_id = mm_id
 
-        if mm_id == 0:
+            if mm_id == 0:
 
-            for k in range(narea):
-                # Area Point - Lat DFi202
-                # Area Point - Lon DFi203
-                # Area Point - Height DFi204
-                lat, lon, alt = bs.unpack_from('s34s35s14', msg, i)
-                i += 83
+                for k in range(narea):
+                    # Area Point - Lat DFi202
+                    # Area Point - Lon DFi203
+                    # Area Point - Height DFi204
+                    lat, lon, alt = bs.unpack_from('s34s35s14', msg, i)
+                    i += 83
+
+                    self.integ.pos[k, :] = [lat*1.1e-8, lon*1.1e-8, alt]
+
+            elif mm_id == 1 or mm_id == 2:
+                sigmask = np.array(narea, dtype=np.int32)
+                for k in range(narea):
+                    # GNSS Signal Modulation Mask - DFi214
+                    # Area Point - Lat DFi202
+                    # Area Point - Lon DFi203
+                    # Area Point - Height DFi204
+                    sigmask[k], lat, lon, alt = bs.unpack_from(
+                        'u8s34s35s14', msg, i)
+                    i += 91
 
                 self.integ.pos[k, :] = [lat*1.1e-8, lon*1.1e-8, alt]
 
-        elif mm_id == 1 or mm_id == 2:
-            sigmask = np.array(narea, dtype=np.int32)
-            for k in range(narea):
-                # GNSS Signal Modulation Mask - DFi214
-                # Area Point - Lat DFi202
-                # Area Point - Lon DFi203
-                # Area Point - Height DFi204
-                sigmask[k], lat, lon, alt = bs.unpack_from(
-                    'u8s34s35s14', msg, i)
-                i += 91
+            if mm_id == 0:
+                # Number of GMM components DFi210
+                ngmm = bs.unpack_from('u2', msg, i)[0]
+                i += 2
 
-                self.integ.pos[k, :] = [lat*1.1e-8, lon*1.1e-8, alt]
+                self.integ.mm_param = np.zeros((ngmm, 3))
 
-        if mm_id == 0:
-            # Number of GMM components DFi210
-            ngmm = bs.unpack_from('u2', msg, i)[0]
-            i += 2
+                for k in range(ngmm):
+                    # GMM component probability DFi211
+                    # GMM component expectation DFi212
+                    # GMM component standard deviation DFi213
+                    prob, exp_, std_ = bs.unpack_from('u4u4u4', msg, i)
+                    i += 12
 
-            self.integ.mm_param = np.zeros((ngmm, 3))
+                    prob *= 0.0625
+                    exp = self.integ.mu_k_t[exp_]
+                    std = self.integ.sig_k_t[std_]
+                    self.integ.mm_param[k, :] = [prob, exp, std]
 
-            for k in range(ngmm):
-                # GMM component probability DFi211
-                # GMM component expectation DFi212
-                # GMM component standard deviation DFi213
-                prob, exp_, std_ = bs.unpack_from('u4u4u4', msg, i)
-                i += 12
+            elif mm_id == 1 or mm_id == 2:
+                self.integ.mm_param = {}
+                n = 3 if mm_id == 1 else 4
 
-                prob *= 0.0625
-                exp = self.integ.mu_k_t[exp_]
-                std = self.integ.sig_k_t[std_]
-                self.integ.mm_param[k, :] = [prob, exp, std]
+                for k in range(narea):
+                    sig_t, nsig = self.decode_mask(sigmask[k], 8, ofst=0)
+                    prm = np.zeros((nsig, n))
 
-        elif mm_id == 1 or mm_id == 2:
-            self.integ.mm_param = {}
-            n = 3 if mm_id == 1 else 4
+                    for j in range(nsig):
+                        # Multipath parameter a DFi215
+                        # Multipath parameter b DFi216
+                        # Multipath parameter c DFi217
+                        a, b, c = bs.unpack_from('u4s5s5', msg, i)
+                        i += 14
 
-            for k in range(narea):
-                sig_t, nsig = self.decode_mask(sigmask[k], 8, ofst=0)
-                prm = np.zeros((nsig, n))
+                        a = self.integ.sig_k_t[a]
+                        prm[j, 0:3] = [a, b*0.25, c*0.0625]
 
-                for j in range(nsig):
-                    # Multipath parameter a DFi215
-                    # Multipath parameter b DFi216
-                    # Multipath parameter c DFi217
-                    a, b, c = bs.unpack_from('u4s5s5', msg, i)
-                    i += 14
+                        if mm_id == 2:
+                            # Multipath parameter d DFi218
+                            d = bs.unpack_from('u8', msg, i)[0]
+                            i += 8
+                            prm[j, 3] = d*0.3515625
 
-                    a = self.integ.sig_k_t[a]
-                    prm[j, 0:3] = [a, b*0.25, c*0.0625]
-
-                    if mm_id == 2:
-                        # Multipath parameter d DFi218
-                        d = bs.unpack_from('u8', msg, i)[0]
-                        i += 8
-                        prm[j, 3] = d*0.3515625
-
-                self.integ.mm_param[k] = prm
+                        self.integ.mm_param[k] = prm
 
         return i
 
@@ -2539,7 +3106,8 @@ class rtcm(cssr):
         i += 12
 
         # SSR provider ID, solution type, iod
-        self.pid, self.sid, self.iodssr = bs.unpack_from('u16u4u4', msg, i)
+        self.pid, self.sid, self.iodssr = bs.unpack_from(
+            'u16u4u4', msg, i)
         i += 24
 
         # mask_sys:: DFi013 0:GPS,1:GLO,2:GAL,3:BDS,4:QZS,5:IRN
@@ -2551,11 +3119,14 @@ class rtcm(cssr):
 
         vp, uri = bs.unpack_from('u4u16', msg, i)
         i += 20
-        self.integ.vp = self.integ.vp_tbl[vp]  # Validity Period DFi065 (0-15)
-        self.integ.uri = uri*0.1  # update rate interval DFi067 (0.1)
+        # Validity Period DFi065 (0-15)
+        self.integ.vp = self.integ.vp_tbl[vp]
+        # update rate interval DFi067 (0.1)
+        self.integ.uri = uri*0.1
 
         sys_t, nsys = self.decode_mask(mask_sys, 16, ofst=0)
         iod_sys = {}
+
         flag_t = {}
         for sys_ in sys_t:
             sys = self.integ.sys_tbl[sys_]
@@ -2580,8 +3151,8 @@ class rtcm(cssr):
         self.msgtype = bs.unpack_from('u12', msg, i)[0]
         i += 12
         if self.monlevel > 0 and self.fh is not None:
-            self.fh.write("##### RTCM 3.x type:{:04d} msg_size: {:d} data_len: {:d} bytes\n".
-                          format(self.msgtype, self.dlen, self.len))
+            self.fh.write("##### RTCM 3.x type:{:04d} msg_size: {:d} bytes\n".
+                          format(self.msgtype, self.dlen))
 
         obs = None
         eph = None
@@ -2590,7 +3161,7 @@ class rtcm(cssr):
 
         self.subtype = subtype
 
-        # Network RTK residual messages
+        # SSR messages
         if self.msgtype in (1057, 1063, 1240, 1246, 1252, 1258):
             self.subtype = sCSSR.ORBIT
             i = self.decode_cssr_orb(msg, i)
@@ -2615,10 +3186,10 @@ class rtcm(cssr):
             i = self.decode_cssr_hclk(msg, i)
         elif self.msgtype == 4076:  # IGS SSR
             i = self.decode_igsssr(msg, i)
-        elif self.msgtype in (1030, 1031, 1303, 1304, 1305):
+        elif self.msgtype in (1030, 1031, 1303, 1304, 1305):  # Network RTK
             self.subtype = sRTCM.NRTK_RES
             i = self.decode_nrtk_residual(msg, i)
-        elif self.is_msmtype(self.msgtype):
+        elif self.is_msmtype(self.msgtype):  # MSM
             self.subtype = sRTCM.MSM
             i, obs = self.decode_msm(msg, i)
         elif self.msgtype in (1007, 1008, 1033):
@@ -2653,6 +3224,48 @@ class rtcm(cssr):
             i, eph = self.decode_gal_eph(msg, i)
         elif self.msgtype == 1029:
             self.decode_unicode_text(msg, i)
+
+        # test messages for RTCM SSR
+        elif self.msgtype == 60:
+            self.subtype = sRTCM.SSR_META
+            i = self.decode_ssr_metadata(msg, i)
+        elif self.msgtype == 61:
+            self.subtype = sRTCM.SSR_GRID
+            i = self.decode_ssr_grid(msg, i)
+        elif self.msgtype in [1057, 41, 62, 63, 64]:
+            self.subtype = sCSSR.ORBIT
+            i = self.decode_cssr_orb(msg, i)
+        elif self.msgtype in [1058, 42, 65, 66, 67]:
+            self.subtype = sCSSR.CLOCK
+            i = self.decode_cssr_clk(msg, i)
+        elif self.msgtype in [1060, 44, 71, 72, 73]:
+            self.subtype = sCSSR.COMBINED
+            i = self.decode_cssr_comb(msg, i)
+        elif self.msgtype in [1061, 45, 74, 75, 76]:
+            self.subtype = sCSSR.URA
+            i = self.decode_cssr_ura(msg, i)
+        elif self.msgtype in [1062, 46, 77, 78, 79]:
+            self.subtype = sCSSR.CLOCK
+            i = self.decode_cssr_hclk(msg, i)
+        elif self.msgtype in [1059, 43, 68, 69, 70]:
+            self.subtype = sCSSR.CBIAS
+            i = self.decode_cssr_cbias(msg, i)
+        elif self.msgtype >= 80 and self.msgtype < 85:
+            self.subtype = sRTCM.SSR_SATANT
+            i = self.decode_ssr_satant(msg, i)
+        elif self.msgtype >= 85 and self.msgtype < 90:
+            if not self.mask_pbias:
+                self.subtype = sRTCM.SSR_PBIAS
+                i = self.decode_cssr_pbias(msg, i)
+        elif self.msgtype >= 90 and self.msgtype < 95:
+            self.subtype = sRTCM.SSR_PBIAS_EX
+            i = self.decode_ssr_pbias_ex(msg, i)
+        elif self.msgtype == 95:
+            self.subtype = sRTCM.SSR_TROP
+            i = self.decode_ssr_trop(msg, i)
+        elif self.msgtype >= 96 and self.msgtype < 101:
+            self.subtype = sRTCM.SSR_STEC
+            i = self.decode_ssr_iono(msg, i)
 
         # test messages for SC-134
         elif self.msgtype == 3:  # minimum integrity
@@ -2691,8 +3304,8 @@ class rtcm(cssr):
         elif self.msgtype == 54:  # SSR integrity test msg
             if self.subtype == 9:
                 self.decode_integrity_vmap(msg, i)
-            elif self.subtype == 10:
-                self.decode_integrity_mmap(msg, i)
+        elif self.subtype == 10:
+            self.decode_integrity_mmap(msg, i)
         else:
             self.subtype = -1
 
@@ -2711,6 +3324,30 @@ class rtcme(cssre):
 
         self.pid = 0  # SSR Provider ID
         self.sid = 0  # SSR Solution Type
+
+        self.mi = 0  # multiple message bit
+        self.iods = 0  # issue of data station
+        self.refid = 0  # reference station ID
+
+        self.csi = 0  # clock streering indicator
+        self.eci = 0  # external clock indicator
+        self.si = 0  # smoothing indicator
+        self.smi = 0  # smoothing interval
+
+        self.msm_t = {
+            uGNSS.GPS: 1071, uGNSS.GLO: 1081, uGNSS.GAL: 1091,
+            uGNSS.SBS: 1101, uGNSS.QZS: 1111, uGNSS.BDS: 1121
+        }
+
+        self.ssr_t = {
+            uGNSS.GPS: 1057, uGNSS.GLO: 1063, uGNSS.GAL: 1240,
+            uGNSS.QZS: 1246, uGNSS.SBS: 1252, uGNSS.BDS: 1258
+        }
+
+        self.eph_t = {
+            uGNSS.GPS: 1019, uGNSS.GLO: 1020, uGNSS.BDS: 1042,
+            uGNSS.QZS: 1044, uGNSS.GAL: 1046
+        }
 
     def set_sync(self, msg, k):
         msg[k] = 0xd3
@@ -2733,6 +3370,173 @@ class rtcme(cssre):
 
     def set_body(self, msg, buff, k, len_):
         msg[k+3:k+len_] = buff[3:len_]
+
+    def round_i(self, v):
+        return int(v+0.5)
+
+    def is_msmtype(self, msgtype):
+        """ check if the message type is MSM """
+        for sys_ in self.msm_t.keys():
+            if msgtype >= self.msm_t[sys_] and msgtype <= self.msm_t[sys_]+6:
+                return True
+        return False
+
+    def msmtype(self, msgtype):
+        """ get system and msm type from message type """
+        sys = uGNSS.NONE
+        msm = 0
+        for sys_ in self.msm_t.keys():
+            if msgtype >= self.msm_t[sys_] and msgtype <= self.msm_t[sys_]+6:
+                sys = sys_
+                msm = msgtype-self.msm_t[sys_]+1
+                break
+        return sys, msm
+
+    def encode_msm_time(self, sys, time):
+        """ decode msm time """
+        if sys == uGNSS.GLO:
+            time = timeadd(gpst2utc(time), 10800.0)
+            week, tow = time2gpst(time)
+            dow = int(tow/86400.0)  # day of week
+            tod = self.round_i((tow - dow*86400.0)*1e3)  # time of day [ms]
+            epoch = ((dow & 0x1f) << 27) | (tod & 0x7ffffff)
+
+        elif sys == uGNSS.BDS:
+            week, tow = time2gpst(gpst2bdt(time))
+            epoch = self.round_i(tow*1e3)
+        else:
+            week, tow = time2gpst(time)
+            epoch = self.round_i(tow*1e3)
+
+        return week, epoch
+
+    def encode_msm(self, msg, obs, i):
+        """ encode MSM message """
+        sys, msm = self.msmtype(self.msgtype)
+
+        # self.time, self.tow = self.encode_msm_time(sys, self.week, tow_)
+        self.week, tow_ = self.encode_msm_time(sys, self.time)
+
+        ofst = 193 if sys == uGNSS.QZS else 1
+
+        svmask = self.encode_mask(obs.sat, 64, ofst)
+        sigmask = self.encode_mask(obs.sig, 32)
+        self.nsat = len(obs.sat)
+        self.nsig = len(obs.sig)
+
+        # augmentation service provider id DFi027
+        bs.pack_into('u12u30u1u3', msg, i, self.refid,
+                     tow_, self.mi, self.iods)
+        i += 53
+
+        bs.pack_into('u2u2u1u3', msg, i, self.csi,
+                     self.eci, self.si, self.smi)
+        i += 8
+        bs.pack_into('u64u32', msg, i, svmask, sigmask)
+        i += 96
+
+        sz = self.nsat*self.nsig
+        if sz > 64:
+            return -1
+        ncell = 0
+        for k in range(self.nsat):
+            sz_ = len(self.sig_n[k])
+            cellmask = self.encode_mask(self.sig_n[k], self.nsig)
+            bs.pack_into(f'u{self.nsig}', msg, i, cellmask)
+            i += self.nsig
+            ncell += sz_
+
+        r = np.zeros(self.nsat)
+        pr = np.ones(ncell)*np.nan
+        cp = np.ones(ncell)*np.nan
+        lock = np.zeros(ncell, dtype=int)
+        half = np.zeros(ncell, dtype=int)
+        cnr = np.zeros(ncell)
+        rrf = np.zeros(ncell)
+
+        ex = np.zeros(self.nsat, dtype=int)
+        rr = np.zeros(self.nsat)
+
+        rms = rCST.CLIGHT*1e-3
+
+        nobs, nsig = obs.P.shape()
+
+        for i in range(nobs):
+            for j in range(nsig):
+                k = 0  # TBD
+                freq = obs.sig.frequency()
+                r[k] = self.round_i(
+                    obs.P[i, j]/(rms*rCST.P2_10))*rms*rCST.P2_10
+
+                # satellite part
+                if msm >= 1 and msm <= 3:
+                    for k in range(self.nsat):
+                        v = int(r[k]/rms)
+                        bs.pack_into('u10', msg, i, v)
+                        i += 10
+                else:
+                    for k in range(self.nsat):
+                        v = int(r[k]/rms)
+                        bs.pack_into('u8', msg, i, v)
+                        i += 8
+
+                if msm == 5 or msm == 7:
+                    for k in range(self.nsat):
+                        bs.pack_into('u4', msg, i, ex[k])
+                        i += 4
+
+                    for k in range(self.nsat):
+                        if r[k] != 0.0:
+                            v = int(r[k]/(rCST.P2_10*rms))
+                            bs.pack_into('u10', msg, i, v)
+                            i += 10
+
+                if msm == 5 or msm == 7:
+                    for k in range(self.nsat):
+                        v = int(rr[k])
+                        bs.pack_into('s14', msg, i, v)
+                        i += 14
+
+                # signal part
+                if msm != 2:
+                    sz = 15 if msm < 6 else 20
+                    scl = rCST.P2_24 if msm < 6 else rCST.P2_29
+                    for k in range(ncell):
+                        pr_ = int(pr[k]/(scl*rms))
+                        bs.pack_into('s'+str(sz), msg, i, pr_)
+                        i += sz
+
+                if msm > 1:
+                    sz = 22 if msm < 6 else 24
+                    scl = rCST.P2_29 if msm < 6 else rCST.P2_31
+                    for k in range(ncell):
+                        cp_ = int(cp[k]/(scl*rms))
+                        bs.pack_into('s'+str(sz), msg, i, cp_)
+                        i += sz
+
+                    sz = 4 if msm < 6 else 10
+                    for k in range(ncell):
+                        bs.pack_into('u'+str(sz), msg, i, lock[k])
+                        i += sz
+
+                    for k in range(ncell):
+                        bs.pack_into('u1', msg, i, half[k])
+                        i += 1
+
+                if msm > 3:
+                    sz = 6 if msm < 6 else 10
+                    scl = 1.0 if msm < 6 else 0.0625
+                    for k in range(ncell):
+                        v = int(cnr[k]/scl)
+                        bs.pack_into('u'+str(sz), msg, i, v)
+                        i += sz
+
+                if msm == 5 or msm == 7:
+                    for k in range(ncell):
+                        bs.pack_into('s15', msg, i, rrf[k]*1e4)
+                        i += 15
+
+        return i
 
     def encode_integrity_ssr(self, msg, i):
         """ RTCM SC-134 SSR integrity message (MT11,12,13) """
@@ -2785,13 +3589,17 @@ class rtcme(cssre):
 
         return i
 
-    def encode(self, msg):
+    def encode(self, msg, obs=None):
         """ encode RTCM messages """
         i = 24
         bs.pack_into('u12', msg, i, self.msgtype)
         i += 12
 
-        if self.msgtype in (11, 12, 13):  # SSR integrity (test)
+        if self.is_msmtype(self.msgtype, obs):
+            self.subtype = sRTCM.MSM
+            i = self.encode_msm(msg, obs, i)
+
+        elif self.msgtype in (11, 12, 13):  # SSR integrity (test)
             i = self.encode_integrity_ssr(msg, i)
 
         return i

@@ -166,6 +166,23 @@ class uGNSS(IntEnum):
 
     MAXSAT = GPSMAX+GALMAX+QZSMAX+BDSMAX+GLOMAX+SBSMAX+IRNMAX
 
+    MINPRNGPS = 1
+    MAXPRNGPS = 36
+    MINPRNGLO = 1
+    MAXPRNGLO = 27
+    MINPRNGAL = 1
+    MAXPRNGAL = 36
+    MINPRNQZS = 193
+    MAXPRNQZS = 210
+    MINPRNBDS = 1
+    MAXPRNBDS = 18
+    MINPRNBDS3 = 19
+    MAXPRNBDS3 = 58
+    MINPRNIRN = 1
+    MAXPRNIRN = 14
+    MINPRNSBS = 120
+    MAXPRNSBS = 158
+
 
 class uTYP(IntEnum):
     """ class for observation types"""
@@ -667,6 +684,16 @@ class Obs():
         self.lli = []
         self.sat = []
         self.sig = {}
+
+    def sort(self):
+        """ sort using satellite index """
+        idx = np.argsort(self.sat)
+        self.sat = self.sat[idx]
+        self.P = self.P[idx, :]
+        self.L = self.L[idx, :]
+        self.D = self.D[idx, :]
+        self.S = self.S[idx, :]
+        self.lli = self.lli[idx, :]
 
 
 class Eph():
@@ -1260,6 +1287,19 @@ def sys2str(sys):
         return "???"
     else:
         return gnss_tbl[sys]
+
+
+def sid2prn(sys, sid):
+    """ convert satellite id to prn """
+    if sys == uGNSS.QZS:
+        prn = sid+rCST.MINPRNQZS-1
+    elif sys == uGNSS.BDS3:
+        prn = sid+rCST.MINPRNBDS3-1
+    elif sys == uGNSS.SBS:
+        prn = sid+rCST.MINPRNSBS-1
+    else:
+        prn = sid
+    return prn
 
 
 def vnorm(r):

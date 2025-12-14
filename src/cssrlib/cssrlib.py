@@ -220,6 +220,8 @@ class local_corr:
         self.ng = -1
         self.pbias = {}
         self.cbias = {}
+        self.yaw = {}
+        self.dyaw = {}
         self.iode = None
         self.dorb = None
         self.dclk = None
@@ -319,6 +321,12 @@ class cssr:
         self.iodssr_p = -1
         self.iodssr_c = np.ones(16, dtype=np.int32)*-1
         self.sig_n_p = []
+        self.mi = 0
+        self.uint = 0
+
+        # SSR Update Interval [s] DF391
+        self.udint_t = [1, 2, 5, 10, 15, 30, 60, 120,
+                        240, 300, 600, 900, 1800, 3600, 7200, 10800]
 
         # maximum validty time for correction
         self.tmax = {sCType.CLOCK: 30.0, sCType.ORBIT: 120.0,
