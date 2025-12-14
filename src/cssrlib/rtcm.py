@@ -697,7 +697,7 @@ class rtcm(cssr):
                          99: uGNSS.BDS, 100: uGNSS.QZS}
             elif msgtype in [60, 61, 95]:  # METADATA, grid definition, trop
                 return uGNSS.NONE
-            elif msgtype in [11]:  # RTCM SC-134 test messages
+            elif msgtype in [11, 12, 13]:  # RTCM SC-134 test messages
                 return uGNSS.NONE
             else:
                 print(f"definition of {msgtype} is missing")
