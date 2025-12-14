@@ -214,7 +214,7 @@ class rtcm(cssr):
         self.pid = 0  # SSR Provider ID
         self.sid = 0  # SSR Solution Type
         self.uint = 0  # Update Interval
-        self.mi = 0
+        self.mi = False
 
         self.nrtk_r = {}
 
@@ -544,7 +544,7 @@ class rtcm(cssr):
         self.tow = bs.unpack_from('u'+str(blen), msg, i)[0]
         self.time = gpst2time(self.week, self.tow)
         i += blen
-        uint, mi = bs.unpack_from('u4u1', msg, i)
+        uint, mi = bs.unpack_from('u4b1', msg, i)
         i += 5
 
         if self.subtype in (sCSSR.ORBIT, sCSSR.COMBINED):
@@ -2204,7 +2204,7 @@ class rtcm(cssr):
 
     def decode_ssr_grid(self, msg, i):
         """ decode SSR Grid Definition Message (E61) """
-        self.pid, self.mi, gid, gtype = bs.unpack_from('u16u1u10u3', msg, i)
+        self.pid, self.mi, gid, gtype = bs.unpack_from('u16b1u10u3', msg, i)
         i += 30
 
         self.gid = gid
@@ -3325,7 +3325,7 @@ class rtcme(cssre):
         self.pid = 0  # SSR Provider ID
         self.sid = 0  # SSR Solution Type
 
-        self.mi = 0  # multiple message bit
+        self.mi = False  # multiple message bit
         self.iods = 0  # issue of data station
         self.refid = 0  # reference station ID
 
@@ -3425,7 +3425,7 @@ class rtcme(cssre):
         self.nsig = len(obs.sig)
 
         # augmentation service provider id DFi027
-        bs.pack_into('u12u30u1u3', msg, i, self.refid,
+        bs.pack_into('u12u30b1u3', msg, i, self.refid,
                      tow_, self.mi, self.iods)
         i += 53
 
