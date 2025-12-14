@@ -65,46 +65,16 @@ class sRTCM(IntEnum):
     SSR_PBIAS_EX = 90
 
 
+class satAntCorr():
+    """ class for satellite antenna corrections """
+
+    def __init__(self, nadc, naddc):
+        self.nadc = nadc
+        self.naddc = naddc
+
+
 class Integrity():
     """ class for integrity information in SC-134 """
-    pid = 0  # augmentation provider id DFi027 (0-4095)
-    vp = 0  # validity period DFi065 (0-15)
-    uri = 0  # update rate interval DFi067 (b16)
-
-    # placeholder for RTCM SSR
-    pidssr = 0  # SSR provider ID
-    sidssr = 0  # SSR solution type
-    iodssr = 0  # SSR iod
-
-    tow = 0
-    iod_sys = {}  # issue of GNSS satellite mask DFi010 (b2)
-    sts = {}  # constellation integrity status DFi029 (b16)
-    mst = {}  # constellation monitoring status DFi030 (b16)
-    src = {}
-
-    nid = {}
-    flag = {}
-    sigmask = {}  # GNSS signal mask DFi033 (b32)
-    iod_sig = {}  # issue of GNSS signal mask DFi012 (b2)
-    sig_ists = {}  # signal integrity status DFi031 (b32)
-    sig_msts = {}  # signal monitoring status DFi032 (b32)
-
-    Paug = 0  # Augmentation System Probability Falut DFi049
-
-    Pa_sp = {}  # Single Satellite PR Message Fault Probability DFi046
-    sig_a = {}  # Overbounding stdev of PR Augmentation Meesage DFi036
-    Pa_sc = {}  # Single Satellite CP Message Fault Probability DFi048
-    ob_p = {}  # Overbounding bias of long-ter PR bias DFi037
-    sig_ob_c = {}  # Ovebounding stdev of CP DFi038
-    ob_c = {}  # Overbounding bias of long-term CP bias DFi039
-
-    nsys = 0
-    nsat = {}
-    sys_t = None
-    sat = {}
-    mask_sys = 0
-
-    mm_param = None
 
     sys_tbl = {0: uGNSS.GPS, 1: uGNSS.GLO, 2: uGNSS.GAL, 3: uGNSS.BDS,
                4: uGNSS.QZS, 5: uGNSS.IRN}
@@ -184,6 +154,45 @@ class Integrity():
         self.sys_r_tbl = {self.sys_tbl[s]: s for s in self.sys_tbl.keys()}
         self.vp_r_tbl = {s: k for k, s in enumerate(self.vp_tbl)}
 
+        self.pid = 0  # augmentation provider id DFi027 (0-4095)
+        self.vp = 0  # validity period DFi065 (0-15)
+        self.uri = 0  # update rate interval DFi067 (b16)
+
+        # placeholder for RTCM SSR
+        self.pidssr = 0  # SSR provider ID
+        self.sidssr = 0  # SSR solution type
+        self.iodssr = 0  # SSR iod
+
+        self.tow = 0
+        self.iod_sys = {}  # issue of GNSS satellite mask DFi010 (b2)
+        self.sts = {}  # constellation integrity status DFi029 (b16)
+        self.mst = {}  # constellation monitoring status DFi030 (b16)
+        self.src = {}
+
+        self.nid = {}
+        self.flag = {}
+        self.sigmask = {}  # GNSS signal mask DFi033 (b32)
+        self.iod_sig = {}  # issue of GNSS signal mask DFi012 (b2)
+        self.sig_ists = {}  # signal integrity status DFi031 (b32)
+        self.sig_msts = {}  # signal monitoring status DFi032 (b32)
+
+        self.Paug = 0  # Augmentation System Probability Falut DFi049
+
+        self.Pa_sp = {}  # Single Satellite PR Message Fault Probability DFi046
+        self.sig_a = {}  # Overbounding stdev of PR Augmentation Meesage DFi036
+        self.Pa_sc = {}  # Single Satellite CP Message Fault Probability DFi048
+        self.ob_p = {}  # Overbounding bias of long-ter PR bias DFi037
+        self.sig_ob_c = {}  # Ovebounding stdev of CP DFi038
+        self.ob_c = {}  # Overbounding bias of long-term CP bias DFi039
+
+        self.nsys = 0
+        self.nsat = {}
+        self.sys_t = None
+        self.sat = {}
+        self.mask_sys = 0
+
+        self.mm_param = None
+
 
 class TropModel():
     """ Tropospheric delay correction model for RTCM SSR """
@@ -233,6 +242,7 @@ class rtcm(cssr):
             uGNSS.QZS: 1044, uGNSS.GAL: 1046
         }
 
+        self.antc = {}
         self.integ = Integrity()
         self.test_mode = False  # for interop testing in SC134
 
@@ -687,8 +697,11 @@ class rtcm(cssr):
                          99: uGNSS.BDS, 100: uGNSS.QZS}
             elif msgtype in [60, 61, 95]:  # METADATA, grid definition, trop
                 return uGNSS.NONE
+            elif msgtype in [11]:  # RTCM SC-134 test messages
+                return uGNSS.NONE
             else:
                 print(f"definition of {msgtype} is missing")
+                # return uGNSS.NONE
 
             return tbl_t[msgtype]
 
@@ -1413,8 +1426,7 @@ class rtcm(cssr):
             self.fh.write("\n")
 
             for sys in self.integ.flag.keys():
-                self.fh.write(" Network ID:{:3d} Integrity Flag: ".format(
-                    self.integ.nid[sys]))
+                self.fh.write(" NIntegrity Flag: ")
                 for sat in self.integ.flag[sys]:
                     self.fh.write(" {:3s}:{:2d}".format(
                         sat2id(sat), self.integ.flag[sys][sat]))
@@ -2176,30 +2188,55 @@ class rtcm(cssr):
 
         return i
 
-    def decode_ssr_satant(self, sys, msg, i):
+    def decode_ssr_satant(self, msg, i):
         """ decode GNSS Satellite Antenna Message (E80,81,82,83,84) """
+        sys = self.get_ssr_sys(self.msgtype)
+
+        # Provider ID
+        # Satellite Antenna IOD (DF+10)
+        # Phase Center Information Infdicator (DF+11)
+        # Group Delay Informatyion Indicator (DF+12)
+        # Nadir Angle Dependent Corrections Indicator (DF+13)
         pid, iods, pci, gdi, ndi = bs.unpack_from('u16u6b1b1b1', msg, i)
         i += 25
         if ndi:
-            nmas, nde = bs.unpack_from('u5u4', msg, i)
+            # Maximum off-nadir angle (DF+14)
+            # Nadir angle dependent corrections range extension (DF+15)
+            emax, nde = bs.unpack_from('u5u4', msg, i)
             i += 9
-        ssi, satmask = bs.unpack_from('u1u64', msg, i)
+        # Satellite Set Indicator (DF+16): set if True, else for single
+        ssi, satmask = bs.unpack_from('b1u64', msg, i)
         i += 65
 
-        prn, nsat = self.decode_mask(satmask, 64, 1)
-        for k in range(nsat):
-            fsi, freqmask = bs.unpack_from('u1u6', msg, i)
+        svids, nsat = self.decode_mask(satmask, 64, 1)
+        for svid in svids:
+            sat = self.svid2sat(sys, svid)
+            if sat not in self.antc:
+                self.antc[sat] = {}
+            # Frequency Set Indicator (DF+17) Set if True else Single
+            # GNSS Frequency Mask (DF+18)
+            fsi, freqmask = bs.unpack_from('b1u6', msg, i)
             i += 7
-            freq, nf = self.decode_mask(freqmask, 6, 0)
-            for j in range(nf):
+            freq_, nf = self.decode_mask(freqmask, 6, 0)
+            for freq in freq_:  # Frequency part
+                # Nadir correction indicator (DF+19)
                 nci = bs.unpack_from('b1', msg, i)[0]
                 i += 1
-                if nci:
-                    nc = bs.unpack_from('s12', msg, i)[0]
+                if nci:  # nadir corrections
+                    nadc_ = bs.unpack_from('s12', msg, i)[0]  # DF+20
                     i += 12
-                if ndi:
-                    ndc = bs.unpack_from('s'+str(3+nde), msg, i)[0]
-                    i += 3+nde
+                    nadc = self.sval(nadc_, 12, 1e-3)  # [m]
+                else:
+                    nadc = None
+                if ndi:  # nadir angle dependent corrections (PCVs) (DF+21)
+                    naddc = np.zeros(nde+1)
+                    for k in range(nde+1):
+                        naddc_ = bs.unpack_from('s'+str(3+nde), msg, i)[0]
+                        i += 3+nde
+                        naddc[k] = self.sval(naddc_, 3+nde, 1e-3)  # [m]
+                else:
+                    naddc = None
+                self.antc[sat][freq] = satAntCorr(nadc, naddc)
         return i
 
     def decode_ssr_grid(self, msg, i):
@@ -3595,7 +3632,7 @@ class rtcme(cssre):
         bs.pack_into('u12', msg, i, self.msgtype)
         i += 12
 
-        if self.is_msmtype(self.msgtype, obs):
+        if self.is_msmtype(self.msgtype):
             self.subtype = sRTCM.MSM
             i = self.encode_msm(msg, obs, i)
 
