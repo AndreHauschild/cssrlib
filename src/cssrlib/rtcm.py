@@ -246,6 +246,15 @@ class rtcm(cssr):
         self.integ = Integrity()
         self.test_mode = False  # for interop testing in SC134
 
+    def is_ssrtype(self, msgtype, tstmsg=False):
+        """ check if the message type is MSM """
+        for sys_ in self.ssr_t.keys():
+            if msgtype >= self.ssr_t[sys_] and msgtype <= self.ssr_t[sys_]+6:
+                return True
+            if tstmsg and msgtype >= 60 and msgtype <= 100:  # SSR test message
+                return True
+        return False
+
     def is_msmtype(self, msgtype):
         """ check if the message type is MSM """
         for sys_ in self.msm_t.keys():
@@ -1201,7 +1210,8 @@ class rtcm(cssr):
 
     def out_log(self, obs=None, eph=None, geph=None, seph=None):
         """ output ssr message to log file """
-        sys = self.get_ssr_sys(self.msgtype)
+        if self.is_ssrtype(self.msgtype, True):
+            sys = self.get_ssr_sys(self.msgtype)
         inet = self.inet
         self.fh.write("{:4d}\t{:s}\n".format(self.msgtype,
                                              time2str(self.time)))
