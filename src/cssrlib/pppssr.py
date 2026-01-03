@@ -6,11 +6,10 @@ import numpy as np
 
 from cssrlib.ephemeris import satposs
 from cssrlib.gnss import sat2id, sat2prn, rSigRnx, uTYP, uGNSS, rCST
-from cssrlib.gnss import ecef2pos, tropmodel, geodist, satazel
+from cssrlib.gnss import ecef2pos, tropmodel, geodist, satazel, uTideModel
 from cssrlib.gnss import time2str, timediff, gpst2utc, tropmapf
 from cssrlib.gnss import trop_model_tbl, iono_model_tbl, default_config
-from cssrlib.ppp import tidedisp, tidedispIERS2010, uTideModel
-from cssrlib.ppp import shapiro, windupcorr
+from cssrlib.ppp import tidedisp, tidedispIERS2010, shapiro, windupcorr
 from cssrlib.peph import antModelRx, antModelTx
 from cssrlib.cssrlib import sCType
 from cssrlib.cssrlib import sCSSRTYPE as sc
