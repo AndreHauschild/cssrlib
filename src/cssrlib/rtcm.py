@@ -242,6 +242,15 @@ class rtcm(cssr):
             uGNSS.QZS: 1044, uGNSS.GAL: 1046
         }
 
+        self.glo_bias = None  # GLONASS receiver bias
+        self.pos_arp = None  # receiver position
+        self.ant_desc = "unknown"
+        self.ant_id = ""
+        self.ant_serial = ""
+        self.rcv_type = ""
+        self.firm_ver = "unknown"
+        self.rcv_serial = ""
+
         self.antc = {}
         self.integ = Integrity()
         self.test_mode = False  # for interop testing in SC134
@@ -3192,7 +3201,7 @@ class rtcm(cssr):
         self.integ.iod_sys = iod_sys
         self.integ.flag = flag_t
 
-    def decode(self, msg, subtype=None):
+    def decode(self, msg, subtype=None, scanmode=False):
         """ decode RTCM messages """
         i = 24
         self.msgtype = bs.unpack_from('u12', msg, i)[0]
@@ -3205,6 +3214,18 @@ class rtcm(cssr):
         eph = None
         geph = None
         seph = None
+
+        if scanmode:
+            if self.msgtype in (1007, 1008, 1033):
+                self.subtype = sRTCM.ANT_DESC
+                i = self.decode_ant_desc(msg, i)
+            elif self.msgtype in (1005, 1006, 1032):
+                self.subtype = sRTCM.ANT_POS
+                i = self.decode_sta_pos(msg, i)
+            elif self.msgtype == 1230:
+                self.subtype = sRTCM.GLO_BIAS
+                i = self.decode_glo_bias(msg, i)
+            return i, obs, eph, geph, seph
 
         self.subtype = subtype
 
