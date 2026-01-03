@@ -1842,7 +1842,7 @@ class RawNav():
         geph.tau1 = tau1*rCST.P2_5
         geph.tau2 = tau2*rCST.P2_5
 
-        # KP: expected UTC(SU) correection
+        # KP: expected UTC(SU) correction
         # A: L1OCd time correction in next string  0: no plan
 
         geph.sattype = M  # 0:M(L3),1:K1(L3),3:K1(L2/L3),2:K2(L1/L2/L3)
@@ -1856,7 +1856,8 @@ class RawNav():
 
         geph.toe = gep2time(N4, Nt, tb*90.0)
         _, geph.toes = time2gpst(geph.toe)
-        geph.tof = gep2time(N4, Nt, ts*3.0)
+        scl = 2.0 if stype == 1 else 3.0
+        geph.tof = gep2time(N4, Nt, ts*scl)
         geph.iode = tb
 
         geph.mode = stype  # FDMA:0,L1OC:1,L2OC:2,L3OC:3
@@ -1931,6 +1932,7 @@ class rcvOpt():
     flg_sbas = False
     flg_rnxnav = False
     flg_rnxobs = False
+    useL1CB = False
 
 
 class rcvDec():
@@ -1974,6 +1976,10 @@ class rcvDec():
     fh_sbas = None
     fh_rnxnav = None
     fh_rnxobs = None
+
+    obs = None
+
+    useL1CB = False
 
     mode_galinav = 0  # 0: RawNav, 1: Decoded
 
@@ -2159,6 +2165,8 @@ class rcvDec():
             self.file_rnxobs = "rnx.obs"
             self.fh_rnxobs = open(prefix+self.file_rnxobs, mode='w')
             # self.re.rnx_obs_header(self.fh_rnxobs)
+        if opt.useL1CB:  # use QZSS L1CB in place of L1CA
+            self.useL1CB = True
 
     def file_close(self):
         """ close file handlers """
