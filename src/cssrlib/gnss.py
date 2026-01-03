@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import bitstruct as bs
 import yaml
 
+
 gpst0 = [1980, 1, 6, 0, 0, 0]  # GPS system time reference
 gst0 = [1999, 8, 22, 0, 0, 0]  # Galileo system time reference
 bdt0 = [2006, 1, 1, 0, 0, 0]  # BeiDou system time reference
@@ -320,10 +321,10 @@ class uTropoModel(IntEnum):
     Enumeration for tropo model selection
     """
 
-    NONE = -1
-    SAAST = 0
-    HOPF = 1
-    SBAS = 2
+    NONE = 0
+    SAAST = 1
+    HOPF = 2
+    SBAS = 3
 
 
 class uIonoModel(IntEnum):
@@ -331,11 +332,21 @@ class uIonoModel(IntEnum):
     Enumeration for iono model selection
     """
 
-    NONE = -1
-    KLOBUCHAR = 0
-    NEQUICK_G = 1
-    GIM = 2
-    SBAS = 3
+    NONE = 0
+    KLOBUCHAR = 1
+    NEQUICK_G = 2
+    GIM = 3
+    SBAS = 4
+
+
+class uTideModel(IntEnum):
+    """
+    Enumeration for Earth tide model selection
+    """
+
+    NONE = 0
+    SIMPLE = 1
+    IERS2010 = 2
 
 
 class rSigRnx():
@@ -741,9 +752,9 @@ class Eph():
         self.sattype = 0
         self.sismai = 0
         self.code = 0
-        self.urai = None
-        self.sisai = None
-        self.isc = None
+        self.urai = np.zeros(4, dtype=int)
+        self.sisai = np.zeros(5, dtype=int)
+        self.isc = np.zeros(4)
         self.integ = 0
         # 0:LNAV,INAV,D1/D2, 1:CNAV/CNAV1/FNAV, 2: CNAV2,
         # 3: CNAV3, 4:FDMA, 5:SBAS
@@ -843,6 +854,8 @@ class Nav():
     """ class to define the navigation message """
 
     def __init__(self, nf=2):
+        self.x = None  # states
+
         self.eph = []
         self.geph = []
         self.seph = []
@@ -861,7 +874,7 @@ class Nav():
 
         self.eop = np.zeros(9)
         self.elmin = np.deg2rad(15.0)
-        self.tidecorr = False
+        self.tidecorr = uTideModel.NONE
         self.nf = nf
         self.ne = 0
         self.nc = 0
@@ -1505,8 +1518,8 @@ def tropmapf(t, pos, el, model=uTropoModel.SAAST):
         return tropmapfHpf(el)
     elif model == uTropoModel.SBAS:  # SBAS model
         return tropmapfSBAS(el)
-    else:
-        return 0
+    else:  # model == uTropoModel.NONE
+        return 0, 0
 
 
 def tropmodel(t, pos, el=np.pi/2, humi=0.7, model=uTropoModel.SAAST):
@@ -1520,8 +1533,8 @@ def tropmodel(t, pos, el=np.pi/2, humi=0.7, model=uTropoModel.SAAST):
         return tropmodelHpf()
     elif model == uTropoModel.SBAS:  # SBAS model
         return tropmodelSBAS(t, pos, el)
-    else:
-        return 0
+    else:  # model == uTropoModel.NONE
+        return 0, 0, 0
 
 
 def meteo(hgt, humi):
