@@ -49,6 +49,8 @@ def ionmodel(t, pos, az, el, nav=None, model=uIonoModel.KLOBUCHAR, cs=None):
         diono, _ = ionoSBAS(t, pos, az, el, cs)
         if diono == 0.0:
             diono = ionKlobuchar(t, pos, az, el, nav.ion)
+    else:  # model == uIonoModel.NONE
+        diono = 0.0
 
     return diono  # iono delay at L1 [m]
 
@@ -59,7 +61,7 @@ class stdpos(pppos):
         """ return index of clock bias (s=0), clock drift (s=1) """
         return 3+s if self.nav.pmode == 0 else 6+s
 
-    def __init__(self, nav, pos0=np.zeros(3), logfile=None, trop_opt=0,
+    def __init__(self, nav, pos0=np.array([0, 0, rCST.RE_WGS84]), logfile=None, trop_opt=0,
                  iono_opt=0, phw_opt=0, csmooth=False, rmode=0):
 
         self.nav = nav
@@ -82,7 +84,7 @@ class stdpos(pppos):
 
         # Select iono model
         #
-        self.ionoModel = uIonoModel.KLOBUCHAR
+        self.nav.ionoModel = uIonoModel.KLOBUCHAR
 
         # 0: use trop-model, 1: estimate, 2: use cssr correction
         self.nav.trop_opt = trop_opt
@@ -333,7 +335,7 @@ class stdpos(pppos):
             if self.nav.iono_opt == 0:  # use model
                 # Ionospheric delay
                 iono = ionmodel(obs.t, pos, az[i], el[i], self.nav,
-                                model=self.ionoModel, cs=cs)
+                                model=self.nav.ionoModel, cs=cs)
             else:
                 iono = 0.0
 
@@ -521,6 +523,7 @@ class stdpos(pppos):
         self.udstate(obs_)
 
         xp = self.nav.x.copy()
+        Pp = self.nav.P.copy()
 
         # Non-differential residuals
         #
@@ -556,9 +559,8 @@ class stdpos(pppos):
         # SD residuals
         #
         v, H, R = self.sdres(obs, xp, y, e, sat, el)
-        Pp = self.nav.P.copy()
 
-        if abs(np.mean(v)) > 100.0:  # clock bias initialize/reset
+        if abs(np.mean(v)) > 1e3:  # clock bias initialize/reset
             ic = self.ICB()
             idx_ = np.where(v != 0.0)[0]
             xp[ic] = np.mean(v[idx_])
