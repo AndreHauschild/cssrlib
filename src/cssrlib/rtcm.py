@@ -146,6 +146,10 @@ class Integrity():
     sig_k_t = [0.0, 0.04, 0.07, 0.10, 0.20, 0.25, 0.30, 0.40, 0.50, 0.70,
                1, 2, 5, 7, 10, -1]
 
+    # GNSS Signal Modulation Mask Table 8-45
+    mod_t = ['BPSK(1)', 'BPSK(5)', 'BPSK(10)', 'BOC(1,1)', 'CBOC(6,1,1/11)',
+             'AltBOC(15,10)', '', '']
+
     # Validity Period DFi065
     vp_tbl = [1, 2, 5, 10, 15, 30, 60, 120, 240,
               300, 600, 900, 1800, 3600, 7200, 10800]
@@ -1219,13 +1223,14 @@ class rtcm(cssr):
 
     def out_log(self, obs=None, eph=None, geph=None, seph=None):
         """ output ssr message to log file """
+        sys = -1
         if self.is_ssrtype(self.msgtype, True):
             sys = self.get_ssr_sys(self.msgtype)
         inet = self.inet
         self.fh.write("{:4d}\t{:s}\n".format(self.msgtype,
                                              time2str(self.time)))
 
-        if self.subtype not in [sRTCM.SSR_META, sRTCM.SSR_GRID]:
+        if sys > 0 and self.subtype not in [sRTCM.SSR_META, sRTCM.SSR_GRID]:
             self.fh.write(f" Update Interval: {self.udint_t[self.uint]}[s]")
 
         self.fh.write(f" MultiMsg: {self.mi}\n")
@@ -1450,6 +1455,61 @@ class rtcm(cssr):
                     self.fh.write(" {:3s}:{:2d}".format(
                         sat2id(sat), self.integ.flag[sys][sat]))
                 self.fh.write("\n")
+            self.fh.flush()
+
+        if self.msgtype == 54:  # RTCM SC134 integrity messages
+            self.fh.write(f" Multiple Message Sequence :{self.integ.seq:}\n")
+            self.fh.write(" Message Type: {:4d}-{:-2d}\n".
+                          format(self.msgtype, self.subtype))
+            if self.subtype == 9:  # MT54-9 VMAP
+                self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
+                self.fh.write(f" Number of Area Points: {self.integ.narea:}\n")
+                self.fh.write(f" Number of Azimuth Slices: {
+                              self.integ.naz:}\n")
+                self.fh.write(" Area Points (lat, long, alt):\n")
+                for k in range(self.integ.narea):
+                    self.fh.write(" {:2d}\t{:12.9f}\t{:12.9f}\t{:4.0f}\n".format
+                                  (k+1, self.integ.pos[k, 0], self.integ.pos[k, 1],
+                                   self.integ.pos[k, 2]))
+
+                self.fh.write(" Visibility mask (az, el):\n")
+                for k in range(self.integ.naz):
+                    self.fh.write("  {:3.0f}\t{:3.0f}\n".format
+                                  (self.integ.azel[k][0], self.integ.azel[k][1]))
+            elif self.subtype == 10:
+                self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
+                self.fh.write(f" Number of Area Points: {self.integ.narea:}\n")
+                self.fh.write(f" Multipath Model ID: {self.integ.mm_id:}\n")
+                self.fh.write(" Boundary Points (lat, long, alt):\n")
+                for k in range(self.integ.narea):
+                    self.fh.write(" {:2d}\t{:12.9f}\t{:12.9f}\t{:4.0f}\n".format
+                                  (k+1, self.integ.pos[k, 0], self.integ.pos[k, 1],
+                                   self.integ.pos[k, 2]))
+
+                if self.integ.mm_id == 0:
+
+                    self.fh.write(
+                        " Components (Prob, Exp, stdev):\n")
+                    for k in range(self.integ.narea):
+                        for j in range(self.integ.np[k]):
+                            self.fh.write(" {:2d}\t{:1d}\t{:6.4f}\t{:7.2f}\t{:7.2f}\n".format
+                                          (k+1, j+1, self.integ.mm_param[k][j][0],
+                                           self.integ.mm_param[k][j][1],
+                                           self.integ.mm_param[k][j][2]))
+                elif self.integ.mm_id in [1, 2]:
+                    n = 3 if self.integ.mm_id == 1 else 4
+                    self.fh.write(
+                        " Multipath Parameters (Modulation,a,b,c(,d)) :\n")
+                    for k in range(self.integ.narea):
+                        for j in range(self.integ.np[k]):
+                            s = int(self.integ.mm_param[k][j][0])
+                            self.fh.write(" {:2d}\t{:1d}\t{:10s}".format
+                                          (k+1, j+1, self.integ.mod_t[s]))
+                            for i in range(n):
+                                self.fh.write("\t{:7.4f}".format
+                                              (self.integ.mm_param[k][j][i+1]))
+                            self.fh.write("\n")
+
             self.fh.flush()
 
         if eph is not None:
@@ -3026,22 +3086,22 @@ class rtcm(cssr):
     def decode_integrity_vmap(self, msg, i):
         """ RTCM SC-134 Satellite Visibility Map Message (MT9) """
 
-        if self.test_mode:  # for test
-            wg, st, rev = bs.unpack_from('u4u8u8', msg, i)
-            i += 20
-            self.subtype = st
-            self.ver = rev
-            self.wg = wg-1
-
         # GPS Epoch Time (TOW) DFi008
         # number of area points DFi201
         # Number of Azimuth Slices DFi205
         # Message Continuation Flag DFi021
-        tow, narea, naz, mcf = bs.unpack_from('u30u8u6u1', msg, i)
-        i += 45
-        self.integ.pos = np.zeros((narea, 3))
 
-        tow *= 1e-3
+        tow, narea, naz, mi = bs.unpack_from('u30u8u6u1', msg, i)
+        i += 45
+        # Multiple Message Sequence Number DFi079
+        self.integ.seq = bs.unpack_from('u5', msg, i)[0]
+        i += 5
+
+        self.integ.tow = tow*1e-3
+        self.integ.narea = narea
+        self.integ.naz = naz
+        self.mi = mi
+        self.integ.pos = np.zeros((narea, 3))
 
         for k in range(narea):
             # Area Point - Lat DFi202
@@ -3052,71 +3112,59 @@ class rtcm(cssr):
 
             self.integ.pos[k, :] = [lat*1.1e-8, lon*1.1e-8, alt]
 
-            self.integ.azel = np.zeros((naz, 2))
+        self.integ.azel = np.zeros((naz, 2))
 
-            # Azimuth DFi206
-            # Elevation Mask DFi208
-            az = 0
-            for k in range(naz):
-                daz, mask_el = bs.unpack_from('u9u7', msg, i)
-                i += 16
-                az += daz
-                self.integ.azel[k, :] = [az, mask_el]
+        # Azimuth DFi206
+        # Elevation Mask DFi208
+        az = 0
+        for k in range(naz):
+            daz, mask_el = bs.unpack_from('u9u7', msg, i)
+            i += 16
+            az += daz
+            self.integ.azel[k, :] = [az, mask_el]
 
         return i
 
     def decode_integrity_mmap(self, msg, i):
         """ RTCM SC-134 Multipath Map Message (MT10) """
 
-        if self.test_mode:  # for test
-            wg, st, rev = bs.unpack_from('u4u8u8', msg, i)
-            i += 20
-            self.subtype = st
-            self.ver = rev
-            self.wg = wg-1
+        # GPS Epoch Time (TOW) DFi008
+        # number of area points DFi201
+        # multipath model ID DFi209: 0:GMM,1:MBM,2:JM
+        tow, narea, mm_id, self.mi, self.integ.seq = bs.unpack_from(
+            'u30u8u3u1u5', msg, i)
+        i += 47
+        self.integ.tow = tow*1e-3
+        self.integ.narea = narea
+        self.integ.pos = np.zeros((narea, 3))
+        self.integ.mm_id = mm_id
 
-            # GPS Epoch Time (TOW) DFi008
-            # number of area points DFi201
-            # multipath model ID DFi209: 0:GMM,1:MBM,2:JM
-            tow, narea, mm_id, mcf = bs.unpack_from(
-                'u30u8u3u1', msg, i)
-            i += 42
-            tow *= 1e-3
-            self.integ.pos = np.zeros((narea, 3))
-            self.integ.mm_id = mm_id
+        sigmask = np.zeros(narea, dtype=np.int32)
 
-            if mm_id == 0:
+        self.integ.np = np.zeros(narea, dtype=np.int32)
+        self.integ.mm_param = {}
+        n = 4 if mm_id == 1 else 5
 
-                for k in range(narea):
-                    # Area Point - Lat DFi202
-                    # Area Point - Lon DFi203
-                    # Area Point - Height DFi204
-                    lat, lon, alt = bs.unpack_from('s34s35s14', msg, i)
-                    i += 83
-
-                    self.integ.pos[k, :] = [lat*1.1e-8, lon*1.1e-8, alt]
-
-            elif mm_id == 1 or mm_id == 2:
-                sigmask = np.array(narea, dtype=np.int32)
-                for k in range(narea):
-                    # GNSS Signal Modulation Mask - DFi214
-                    # Area Point - Lat DFi202
-                    # Area Point - Lon DFi203
-                    # Area Point - Height DFi204
-                    sigmask[k], lat, lon, alt = bs.unpack_from(
-                        'u8s34s35s14', msg, i)
-                    i += 91
-
-                self.integ.pos[k, :] = [lat*1.1e-8, lon*1.1e-8, alt]
+        for k in range(narea):
+            if mm_id in [1, 2]:
+                sigmask[k] = bs.unpack_from('u8', msg, i)[0]
+                i += 8
+            # Area Point - Lat DFi202
+            # Area Point - Lon DFi203
+            # Area Point - Height DFi204
+            lat, lon, alt = bs.unpack_from('s34s35s14', msg, i)
+            i += 83
+            self.integ.pos[k, :] = [lat*1.1e-8, lon*1.1e-8, alt]
+            # i += 26  # ?
 
             if mm_id == 0:
                 # Number of GMM components DFi210
                 ngmm = bs.unpack_from('u2', msg, i)[0]
                 i += 2
+                self.integ.np[k] = ngmm
+                prm = np.zeros((ngmm, 3))
 
-                self.integ.mm_param = np.zeros((ngmm, 3))
-
-                for k in range(ngmm):
+                for j in range(ngmm):
                     # GMM component probability DFi211
                     # GMM component expectation DFi212
                     # GMM component standard deviation DFi213
@@ -3126,33 +3174,34 @@ class rtcm(cssr):
                     prob *= 0.0625
                     exp = self.integ.mu_k_t[exp_]
                     std = self.integ.sig_k_t[std_]
-                    self.integ.mm_param[k, :] = [prob, exp, std]
+                    prm[j, :] = [prob, exp, std]
+
+                self.integ.mm_param[k] = prm
 
             elif mm_id == 1 or mm_id == 2:
-                self.integ.mm_param = {}
-                n = 3 if mm_id == 1 else 4
+                # mm_id=1: Mats Brenner Model Data
+                sig_t, nsig = self.decode_mask(sigmask[k], 8, ofst=0)
+                self.integ.np[k] = nsig
+                prm = np.zeros((nsig, n))
 
-                for k in range(narea):
-                    sig_t, nsig = self.decode_mask(sigmask[k], 8, ofst=0)
-                    prm = np.zeros((nsig, n))
+                for j in range(nsig):
+                    # Multipath parameter a DFi215
+                    # Multipath parameter b DFi216
+                    # Multipath parameter c DFi217
+                    a, b, c = bs.unpack_from('u4s5s5', msg, i)
+                    i += 14
 
-                    for j in range(nsig):
-                        # Multipath parameter a DFi215
-                        # Multipath parameter b DFi216
-                        # Multipath parameter c DFi217
-                        a, b, c = bs.unpack_from('u4s5s5', msg, i)
-                        i += 14
+                    prm[j, 0] = sig_t[j]
+                    a = self.integ.sig_k_t[a]
+                    prm[j, 1:4] = [a, b*0.25, c*0.0625]
 
-                        a = self.integ.sig_k_t[a]
-                        prm[j, 0:3] = [a, b*0.25, c*0.0625]
+                    if mm_id == 2:
+                        # Multipath parameter d DFi218
+                        d = bs.unpack_from('u8', msg, i)[0]
+                        i += 8
+                        prm[j, 4] = d*0.3515625
 
-                        if mm_id == 2:
-                            # Multipath parameter d DFi218
-                            d = bs.unpack_from('u8', msg, i)[0]
-                            i += 8
-                            prm[j, 3] = d*0.3515625
-
-                        self.integ.mm_param[k] = prm
+                self.integ.mm_param[k] = prm
 
         return i
 
@@ -3200,6 +3249,19 @@ class rtcm(cssr):
 
         self.integ.iod_sys = iod_sys
         self.integ.flag = flag_t
+
+    def decode_sc134_test_header(self, msg, i):
+        # MT51-56 has subtype to extent message type space
+        # DFi028 uint8 as in Table 9-35
+
+        # Message Type     DF002  uint12
+        # Working Group    DFi020 uint4
+        # Sub-Message      DFi028 uint8
+        # Message Revision DFi00x uint4 => uint8?
+        wg, self.subtype, self.ver = bs.unpack_from('u4u8u8', msg, i)
+        self.wg = wg-1
+        i += 20
+        return i
 
     def decode(self, msg, subtype=None, scanmode=False):
         """ decode RTCM messages """
@@ -3370,12 +3432,13 @@ class rtcm(cssr):
             self.subtype = sRTCM.INTEG_SSR_TROP
             self.decode_integrity_ssr(msg, i)
         elif self.msgtype == 54:  # SSR integrity test msg
+            i = self.decode_sc134_test_header(msg, i)
             if self.subtype == 9:
                 self.decode_integrity_vmap(msg, i)
-        elif self.subtype == 10:
-            self.decode_integrity_mmap(msg, i)
-        else:
-            self.subtype = -1
+            elif self.subtype == 10:
+                self.decode_integrity_mmap(msg, i)
+            else:
+                self.subtype = -1
 
         if self.monlevel > 0 and self.fh is not None:
             self.out_log(obs, eph, geph, seph)
