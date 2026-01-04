@@ -1464,8 +1464,8 @@ class rtcm(cssr):
             if self.subtype == 9:  # MT54-9 VMAP
                 self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
                 self.fh.write(f" Number of Area Points: {self.integ.narea:}\n")
-                self.fh.write(f" Number of Azimuth Slices: {
-                              self.integ.naz:}\n")
+                self.fh.write(" Number of Azimuth Slices: " +
+                              f"{self.integ.naz:}\n")
                 self.fh.write(" Area Points (lat, long, alt):\n")
                 for k in range(self.integ.narea):
                     self.fh.write(" {:2d}\t{:12.9f}\t{:12.9f}\t{:4.0f}\n".format
