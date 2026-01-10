@@ -432,6 +432,27 @@ class sbasDec(cssr):
         i += 2
         return i
 
+    def decode_sbas_fast_corr_blk(self, msg, i, n, type_):
+        """ decode fast correction for n blocks """
+        for k in range(n):
+            fc = bs.unpack_from('s12', msg, i)[0]
+            i += 12
+            j = type_*13+k
+            if j >= len(self.sat):
+                break
+            self.lc[0].hclk[self.sat[j]] = -self.sval(fc, 12, 0.125)
+        for k in range(n):
+            udrei = bs.unpack_from('u4', msg, i)[0]
+            i += 4
+            j = type_*13+k
+            if j >= len(self.sat):
+                break
+            self.obad.udrei[self.sat[j]] = udrei
+            self.set_t0(sat=self.sat[j], ctype=sCType.HCLOCK, t=self.time)
+
+        self.lc[0].cstat |= (1 << sCType.HCLOCK)
+        return i
+
     def decode_sbas_fast_corr(self, msg, i):
         """ Types 2 to 5 fast correction message """
         type_ = 0 if self.msgtype == 0 else self.msgtype-2
@@ -443,23 +464,7 @@ class sbasDec(cssr):
             i += 208
             return i
 
-        for k in range(13):
-            fc = bs.unpack_from('s12', msg, i)[0]
-            i += 12
-            j = type_*13+k
-            if j >= len(self.sat):
-                break
-            self.lc[0].hclk[self.sat[j]] = -self.sval(fc, 12, 0.125)
-        for k in range(13):
-            udrei = bs.unpack_from('u4', msg, i)[0]
-            i += 4
-            j = type_*13+k
-            if j >= len(self.sat):
-                break
-            self.obad.udrei[self.sat[j]] = udrei
-            self.set_t0(sat=self.sat[j], ctype=sCType.HCLOCK, t=self.time)
-
-        self.lc[0].cstat |= (1 << sCType.HCLOCK)
+        i = self.decode_sbas_fast_corr_blk(msg, i, 13, type_)
         return i
 
     def decode_sbas_integrity(self, msg, i):
@@ -640,8 +645,8 @@ class sbasDec(cssr):
         vc = bs.unpack_from('u1', msg, i)[0]
         i += 1
 
-        i0 = 117 if vc == 0 else 105
-        iodp = bs.unpack_from('u2', msg, i0)[0]
+        ofst = 102 if vc == 0 else 103
+        iodp = bs.unpack_from('u2', msg, i+ofst)[0]
         if iodp != self.iodp:
             return i
 
@@ -669,6 +674,20 @@ class sbasDec(cssr):
 
         return i
 
+    def decode_sbas_mixed_corr(self, msg, i):
+        """ Type 24 mixed fast/long correction """
+
+        # fast correction (106bits)
+        iodp, type_, iodf = bs.unpack_from('u2u2u2', msg, i+96)
+
+        if iodp != self.iodp:
+            i += 208
+            return i
+
+        i = self.decode_sbas_fast_corr_blk(msg, i, 6, type_)
+        i = self.decode_sbas_lcorr_half(msg, i)  # MT25 half-msg(106bits)
+        return i
+
     def decode_sbas_long_corr(self, msg, i):
         """ Type 25 long-term satellite error correction """
         for k in range(2):
@@ -677,13 +696,18 @@ class sbasDec(cssr):
 
     def decode_sbas_iono(self, msg, i):
         """ Type 26 Ionospheric delay message """
-        iodi = bs.unpack_from('u2', msg, 217)[0]
+        iodi = bs.unpack_from('u2', msg, i+203)[0]
         if iodi != self.iodi:
             i += 212
             return i
         band, bid = bs.unpack_from('u4u4', msg, i)
-        nigp = len(self.vtec[band])
         i += 8
+        if band not in self.vtec:
+            i += 204
+            return i
+
+        nigp = len(self.vtec[band])
+
         for k in range(15):
             vd, givei = bs.unpack_from('u9u4', msg, i)
             i += 13
