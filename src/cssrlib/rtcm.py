@@ -1466,16 +1466,16 @@ class rtcm(cssr):
                 self.fh.write(f" Number of Area Points: {self.integ.narea:}\n")
                 self.fh.write(" Number of Azimuth Slices: " +
                               f"{self.integ.naz:}\n")
-                self.fh.write(" Area Points (lat, long, alt):\n")
+                self.fh.write(" Area Points (lat, long, alt), naz:\n")
                 for k in range(self.integ.narea):
-                    self.fh.write(" {:2d}\t{:12.9f}\t{:12.9f}\t{:4.0f}\n".format
+                    self.fh.write(" {:2d}\t{:12.9f}\t{:12.9f}\t{:4.0f}\t{:2d}\n".format
                                   (k+1, self.integ.pos[k, 0], self.integ.pos[k, 1],
-                                   self.integ.pos[k, 2]))
+                                   self.integ.pos[k, 2], self.integ.naz[k]))
 
-                self.fh.write(" Visibility mask (az, el):\n")
-                for k in range(self.integ.naz):
-                    self.fh.write("  {:3.0f}\t{:3.0f}\n".format
-                                  (self.integ.azel[k][0], self.integ.azel[k][1]))
+                    self.fh.write(" Visibility mask (az, el):\n")
+                    for j in range(self.integ.naz[k]):
+                        self.fh.write("  {:3.0f}\t{:3.0f}\n".format
+                                      (self.integ.azel[k][j][0], self.integ.azel[k][j][1]))
             elif self.subtype == 10:
                 self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
                 self.fh.write(f" Number of Area Points: {self.integ.narea:}\n")
@@ -2477,7 +2477,7 @@ class rtcm(cssr):
         trop.gnh = gnh*0.01e-3  # south-north gradient [m/deg]
         # wet
         trop.ofstw = ofstw*0.1e-3+0.252  # offset [m]
-        trop.gew = gew*0.1e-3  # west-east gradient [m/deg]
+        trop.gew = gew*0.01e-3  # west-east gradient [m/deg]
         trop.gnw = gnw*0.01e-3  # south-north gradient [m/deg]
 
         if rmi:  # residual information part
@@ -2544,6 +2544,9 @@ class rtcm(cssr):
                 # Resolution Scale Factor Exponent
                 sf = bs.unpack_from('u3', msg, i)[0]  # DF+073
                 i += 3
+                scl = 1e-3*(2**sf)
+            else:
+                scl = 1.0
 
             self.lc[inet].stec = {}
             fmt = 's'+str(rlen)
@@ -2554,7 +2557,6 @@ class rtcm(cssr):
                 for j in range(ofst, ofst+ng):
                     res = bs.unpack_from(fmt, msg, i)[0]  # DF+062
                     i += rlen
-                    scl = 1e-3*(2**sf)
                     self.lc[inet].stec[sat_][j] = self.sval(res, rlen, scl)
 
         self.gid = gid
@@ -3088,40 +3090,44 @@ class rtcm(cssr):
 
         # GPS Epoch Time (TOW) DFi008
         # number of area points DFi201
-        # Number of Azimuth Slices DFi205
         # Message Continuation Flag DFi021
 
-        tow, narea, naz, mi = bs.unpack_from('u30u8u6u1', msg, i)
-        i += 45
+        tow, narea, mi = bs.unpack_from('u30u8u1', msg, i)
+        i += 39
         # Multiple Message Sequence Number DFi079
         self.integ.seq = bs.unpack_from('u5', msg, i)[0]
         i += 5
 
         self.integ.tow = tow*1e-3
         self.integ.narea = narea
-        self.integ.naz = naz
         self.mi = mi
         self.integ.pos = np.zeros((narea, 3))
+        self.integ.naz = np.zeros(narea, dtype=int)
+        self.integ.azel = {}
 
         for k in range(narea):
             # Area Point - Lat DFi202
             # Area Point - Lon DFi203
             # Area Point - Height DFi204
-            lat, lon, alt = bs.unpack_from('s34s35s14', msg, i)
-            i += 83
+            # Number of Azimuth Slices DFi205
+            lat, lon, alt, naz = bs.unpack_from('s34s35s14u6', msg, i)
+            i += 89
 
             self.integ.pos[k, :] = [lat*1.1e-8, lon*1.1e-8, alt]
+            self.integ.naz[k] = naz
 
-        self.integ.azel = np.zeros((naz, 2))
+            azel = np.zeros((naz, 2))
 
-        # Azimuth DFi206
-        # Elevation Mask DFi208
-        az = 0
-        for k in range(naz):
-            daz, mask_el = bs.unpack_from('u9u7', msg, i)
-            i += 16
-            az += daz
-            self.integ.azel[k, :] = [az, mask_el]
+            # Azimuth DFi206
+            # Elevation Mask DFi208
+            az = 0
+            for j in range(naz):
+                daz, mask_el = bs.unpack_from('u9u7', msg, i)
+                i += 16
+                az += daz
+                azel[j, :] = [az, mask_el]
+
+            self.integ.azel[k] = azel
 
         return i
 
