@@ -1545,16 +1545,17 @@ def meteo(hgt, humi):
     return pres, temp, e
 
 
-def mapf(el, a, b, c):
+def mapf(sE, a, b, c):
     """ simple tropospheric mapping function """
-    sinel = np.sin(el)
-    return (1.0+a/(1.0+b/(1.0+c)))/(sinel+(a/(sinel+b/(sinel+c))))
+    return (1.0+a/(1.0+b/(1.0+c)))/(sE+(a/(sE+b/(sE+c))))
 
 
-def tropmapfNiell(t, pos, el):
-    """ tropospheric mapping function by Niell (NMF) """
+def mapfParam(t, pos, el):
+    """ mapping function parameters based on lat,alt,time """
     if pos[2] < -1e3 or pos[2] > 20e3 or el <= 0.0:
         return 0.0, 0.0
+    # lat = [15,30,45,60,75]
+    # hs(average) [a,b,c] hs(amplitude) [a,b,c] wet [a,b,c]
     coef = np.array([
         [1.2769934E-3, 1.2683230E-3, 1.2465397E-3, 1.2196049E-3, 1.2045996E-3],
         [2.9153695E-3, 2.9152299E-3, 2.9288445E-3, 2.9022565E-3, 2.9024912E-3],
@@ -1566,9 +1567,8 @@ def tropmapfNiell(t, pos, el):
         [1.4275268E-3, 1.5138625E-3, 1.4572752E-3, 1.5007428E-3, 1.7599082E-3],
         [4.3472961E-2, 4.6729510E-2, 4.3908931E-2, 4.4626982E-2, 5.4736038E-2],
     ])
-    aht = [2.53E-5, 5.49E-3, 1.14E-3]
     lat = np.rad2deg(pos[0])
-    hgt = pos[2]
+
     y = (time2doy(t)-28.0)/365.25
     if lat < 0.0:
         y += 0.5
@@ -1577,9 +1577,29 @@ def tropmapfNiell(t, pos, el):
     c = interpc(coef, lat)
     ah = c[0:3]-c[3:6]*cosy
     aw = c[6:9]
-    dm = (1.0/np.sin(el)-mapf(el, aht[0], aht[1], aht[2]))*hgt*1e-3
-    mapfh = mapf(el, ah[0], ah[1], ah[2])+dm
-    mapfw = mapf(el, aw[0], aw[1], aw[2])
+
+    # return [ah,bh,ch], [aw,bw,cw]
+    return ah, aw
+
+
+def tropmapfNiell(t, pos, el, ah=None, aw=None):
+    """ tropospheric mapping function by Niell (NMF) """
+
+    hgt = pos[2]  # ellipsoidal height [m]
+
+    if hgt < -1e3 or hgt > 20e3 or el <= 0.0:
+        return 0.0, 0.0
+
+    if ah is None or aw is None:
+        ah, aw = mapfParam(t, pos, el)
+
+    aht = [2.53E-5, 5.49E-3, 1.14E-3]  # height correction
+
+    sE = np.sin(el)
+    dm = (1.0/sE-mapf(sE, aht[0], aht[1], aht[2]))*hgt*1e-3
+    mapfh = mapf(sE, ah[0], ah[1], ah[2])+dm
+    mapfw = mapf(sE, aw[0], aw[1], aw[2])
+
     return mapfh, mapfw
 
 
@@ -1640,8 +1660,8 @@ def tropmapfSBAS(el):
     return mf, mf
 
 
-def tropmodelSBAS(t, pos, el=np.pi/2):
-    """ SBAS tropospheric delay model """
+def atmosParam(t, lat, el=np.pi/2):
+    """ atmospheric model parameters (P[mbar], T[K], e[mbar], beta[K/m], lam) """
 
     # average of P[mbar], T[K], e[mbar], beta[K/m], lam
     tbl_a = np.array([
@@ -1661,8 +1681,6 @@ def tropmodelSBAS(t, pos, el=np.pi/2):
         [-0.50, 14.50, 3.39, 0.62e-3, 0.30],
     ])
 
-    lat = pos[0]*rCST.R2D
-    hgt = pos[2]
     dmin = 28 if lat >= 0 else 211
     y = (time2doy(t)-dmin)/365.25
     cosy = np.cos(2.0*np.pi*y)
@@ -1670,18 +1688,41 @@ def tropmodelSBAS(t, pos, el=np.pi/2):
     c = interpc(np.c_[tbl_a, tbl_v].T, np.abs(lat))
     pres, temp, e, beta, lam = c[0:5]-c[5:10]*cosy
 
+    return pres, temp, e, beta, lam
+
+
+def tropheightCorr(t, temp, beta, lam, hgt):
+    """ tropspheric delay height correction  """
+
+    Rd, g = 287.054, 9.80665
+
+    p1, p2 = 1-beta*hgt/temp, g/(Rd*beta)
+    sf_hs = np.pow(p1, p2)
+    sf_wet = np.pow(p1, (lam+1)*p2-1)
+
+    return sf_hs, sf_wet
+
+
+def tropmodelSBAS(t, pos, el=np.pi/2):
+    """ SBAS tropospheric delay model """
+
+    lat = pos[0]*rCST.R2D
+    hgt = pos[2]
+
+    pres, temp, e, beta, lam = atmosParam(t, lat, el)
+    sf_hs, sf_wet = tropheightCorr(t, temp, beta, lam, hgt)
+
     Rd, gm = 287.054, 9.784
     # zero-altitude zenith delay term
     z_hyd = 77.604e-6*Rd*pres/gm
     z_wet = 0.382*Rd*e/((gm*(lam+1.0)-beta*Rd)*temp)
 
-    g = 9.80665
-    d_hyd = np.pow(1-beta*hgt/temp, g/(Rd*beta))*z_hyd
-    d_wet = np.pow(1-beta*hgt/temp, (lam+1)*g/(Rd*beta)-1)*z_wet
+    d_hyd = sf_hs*z_hyd
+    d_wet = sf_wet*z_wet
 
     # mapping function
-    s_el = np.sin(el)
-    mf = 1.001/np.sqrt(0.002001+s_el**2)
+    sE = np.sin(el)
+    mf = 1.001/np.sqrt(0.002001+sE**2)
 
     trop_hyd, trop_wet = d_hyd*mf, d_wet*mf
 

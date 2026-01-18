@@ -217,20 +217,29 @@ class local_corr:
     def __init__(self):
         self.inet = -1
         self.inet_ref = -1
-        self.ng = -1
+        self.ng = 0
+        self.ofst = 0
         self.pbias = {}
         self.cbias = {}
         self.yaw = {}
         self.dyaw = {}
         self.iode = None
         self.dorb = None
+        self.ddorb = None
         self.dclk = None
+        self.ddclk = None
+        self.dddclk = None
         self.hclk = None
+        self.ura = None
         self.stec = None
         self.trph = None
         self.trpw = None
-        self.ci = None
-        self.ct = None
+        self.dth = None  # trop hydro-static (residual term)
+        self.dtw = None  # trop wet (residual term)
+        self.maph = None  # mapping function parameters (ah, bh, ch) (hs)
+        self.mapw = None  # mapping function parameters (aw, bw, cw) (wet)
+        self.ct = None  # trop parameters (functional term)
+        self.ci = None  # iono parameters (functional term)
         self.quality_trp = None
         self.quality_stec = None
         self.sat_n = []
@@ -238,7 +247,7 @@ class local_corr:
         self.cstat = 0            # status for receiving CSSR message
         self.t0s = {}
         sc_t = [sCType.CLOCK, sCType.ORBIT, sCType.CBIAS, sCType.PBIAS,
-                sCType.HCLOCK]
+                sCType.HCLOCK, sCType.URA, sCType.TROP, sCType.STEC]
         for sc in sc_t:
             self.t0s[sc] = gtime_t()
 
@@ -279,6 +288,8 @@ class cssr:
         self.cbias = []
         self.pbias = []
         self.inet = -1
+        self.datum = 0
+        self.udi = np.zeros(sCType.MAX, dtype=int)
         self.facility = -1
         self.pattern = -1
         self.sid = -1
@@ -322,7 +333,6 @@ class cssr:
         self.iodssr_c = np.ones(16, dtype=np.int32)*-1
         self.sig_n_p = []
         self.mi = 0
-        self.uint = 0
 
         # SSR Update Interval [s] DF391
         self.udint_t = [1, 2, 5, 10, 15, 30, 60, 120,
@@ -541,7 +551,7 @@ class cssr:
         if self.week >= 0:
             self.time = gpst2time(self.week, self.tow)
         fmt = 'u4u1u4'
-        names = ['uint', 'mi', 'iodssr']
+        names = ['udi', 'mi', 'iodssr']
         dfm = bs.unpack_from_dict(fmt, names, msg, i)
         i += 9
         return (dfm, i)
@@ -676,6 +686,7 @@ class cssr:
         """decode MT4073,2 Orbit Correction message """
         head, i = self.decode_head(msg, i)
         self.flg_net = False
+        self.udi[sCType.ORBIT] = head['udi']
         self.lc[inet].dorb = {}
         self.lc[inet].iode = {}
 
@@ -692,6 +703,7 @@ class cssr:
         """decode MT4073,3 Clock Correction message """
         head, i = self.decode_head(msg, i)
         self.flg_net = False
+        self.udi[sCType.CLOCK] = head['udi']
         # if self.iodssr != head['iodssr']:
         #    return -1
 
@@ -722,6 +734,7 @@ class cssr:
         head, i = self.decode_head(msg, i)
         nsat = self.nsat_n
         self.flg_net = False
+        self.udi[sCType.CBIAS] = head['udi']
         self.lc[inet].cbias = {}
         for k in range(nsat):
             sat = self.sat_n[k]
@@ -741,6 +754,7 @@ class cssr:
         head, i = self.decode_head(msg, i)
         nsat = self.nsat_n
         self.flg_net = False
+        self.udi[sCType.PBIAS] = head['udi']
         self.lc[inet].pbias = {}
         self.lc[inet].di = {}
         for k in range(nsat):
@@ -761,6 +775,7 @@ class cssr:
         """decode MT4073,6 Bias Correction message """
         nsat = self.nsat_n
         head, i = self.decode_head(msg, i)
+
         # if self.iodssr != head['iodssr']:
         #    return -1
         dfm = bs.unpack_from_dict('b1b1b1', ['cb', 'pb', 'net'], msg, i)
@@ -776,9 +791,12 @@ class cssr:
 
         if dfm['cb']:
             self.lc[inet].cbias = {}
+            self.udi[sCType.CBIAS] = head['udi']
+
         if dfm['pb']:
             self.lc[inet].pbias = {}
             self.lc[inet].di = {}
+            self.udi[sCType.PBIAS] = head['udi']
         ki = 0
         for k in range(self.nsat_n):
             if not self.isset(v['svmaskn'], self.nsat_n, k):
@@ -811,18 +829,19 @@ class cssr:
 
         return i
 
-    def decode_cssr_ura(self, msg, i):
+    def decode_cssr_ura(self, msg, i, inet=0):
         """decode MT4073,7 URA message """
         head, i = self.decode_head(msg, i)
         if self.iodssr != head['iodssr']:
             return -1
-        self.ura = {}
+        self.udi[sCType.URA] = head['udi']
+        self.lc[inet].ura = {}
         for k in range(self.nsat_n):
             sat = self.sat_n[k]
             v = bs.unpack_from_dict('u3u3', ['class', 'val'], msg, i)
-            self.ura[sat] = self.quality_idx(v['class'], v['val'])
+            self.lc[inet].ura[sat] = self.quality_idx(v['class'], v['val'])
             i += 6
-        self.lc[0].cstat |= (1 << sCType.URA)
+        self.lc[inet].cstat |= (1 << sCType.URA)
         self.set_t0(ctype=sCType.URA, t=self.time)
 
         return i
@@ -855,6 +874,7 @@ class cssr:
         if self.iodssr != head['iodssr']:
             return -1
         self.flg_net = True
+        self.udi[sCType.STEC] = head['udi']
         dfm = bs.unpack_from_dict('u2u5u'+str(self.nsat_n),
                                   ['stype', 'inet', 'svmaskn'], msg, i)
         inet = dfm['inet']
@@ -887,6 +907,7 @@ class cssr:
                                   ['ttype', 'range', 'inet', 'svmaskn',
                                   'class', 'value', 'ng'], msg, i)
         self.flg_net = True
+        self.udi[sCType.TROP] = head['udi']
         inet = dfm['inet']
         self.netmask[inet] = netmask = dfm['svmaskn']
         self.lc[inet].sat_n = self.decode_local_sat(netmask)
@@ -899,16 +920,16 @@ class cssr:
         sz = 7 if dfm['range'] == 0 else 16
         fmt = 's'+str(sz)
         self.lc[inet].stec = np.zeros(ng, dtype=list)
-        self.lc[inet].dtd = np.zeros(ng)
+        self.lc[inet].dth = np.zeros(ng)
         self.lc[inet].dtw = np.zeros(ng)
 
         for j in range(ng):
             self.lc[inet].stec[j] = {}
             if dfm['ttype'] > 0:
-                vd = bs.unpack_from_dict('s9s8', ['dtd', 'dtw'], msg, i)
+                dth, dtw = bs.unpack_from('s9s8', msg, i)
                 i += 17
-                self.lc[inet].dtd[j] = self.sval(vd['dtd'], 9, 0.004)+2.3
-                self.lc[inet].dtw[j] = self.sval(vd['dtw'], 8, 0.004)
+                self.lc[inet].dth[j] = self.sval(dth, 9, 0.004)+2.3
+                self.lc[inet].dtw[j] = self.sval(dtw, 8, 0.004)
 
             for k in range(nsat):
                 sat = self.lc[inet].sat_n[k]
@@ -960,8 +981,10 @@ class cssr:
         if dfm['orb']:
             self.lc[inet].dorb = {}
             self.lc[inet].iode = {}
+            self.udi[sCType.ORBIT] = head['udi']
         if dfm['clk']:
             self.lc[inet].dclk = {}
+            self.udi[sCType.CLOCK] = head['udi']
 
         for k in range(self.nsat_n):
             if self.flg_net and not self.isset(svmask, self.nsat_n, k):
@@ -995,6 +1018,7 @@ class cssr:
         self.flg_net = True
         inet = dfm['inet']
         self.lc[inet].ng = ng = dfm['ng']
+        self.lc[inet].ofst = 0
         self.lc[inet].flg_trop = dfm['trop']
         self.lc[inet].flg_stec = dfm['stec']
         i += 15
@@ -1004,33 +1028,37 @@ class cssr:
             self.lc[inet].trop_quality = self.quality_idx(v['class'],
                                                           v['value'])
             i += 6
+            self.udi[sCType.TROP] = head['udi']
+
+        self.lc[inet].ct = np.zeros((2, 4))
+
         if dfm['trop'] & 2:  # functional term
             self.lc[inet].ttype = ttype = bs.unpack_from('u2', msg, i)[0]
             i += 2
             vt = bs.unpack_from_dict('s9', ['t00'], msg, i)
             i += 9
-            self.lc[inet].ct = np.zeros(4)
-            self.lc[inet].ct[0] = self.sval(vt['t00'], 9, 0.004)
+            self.lc[inet].ct[0, 0] = self.sval(vt['t00'], 9, 0.004)
             if ttype > 0:
                 vt = bs.unpack_from_dict('s7s7', ['t01', 't10'], msg, i)
                 i += 14
-                self.lc[inet].ct[1] = self.sval(vt['t01'], 7, 0.002)
-                self.lc[inet].ct[2] = self.sval(vt['t10'], 7, 0.002)
+                self.lc[inet].ct[0, 1] = self.sval(vt['t01'], 7, 0.002)
+                self.lc[inet].ct[0, 2] = self.sval(vt['t10'], 7, 0.002)
             if ttype > 1:
                 vt = bs.unpack_from_dict('s7', ['t11'], msg, i)
                 i += 7
-                self.lc[inet].ct[3] = self.sval(vt['t11'], 7, 0.001)
+                self.lc[inet].ct[0, 3] = self.sval(vt['t11'], 7, 0.001)
 
         if dfm['trop'] & 1:  # residual term
             vh = bs.unpack_from_dict('u1u4', ['sz', 'ofst'], msg, i)
             i += 5
-            trop_ofst = vh['ofst']*0.02
+            self.lc[inet].ct[1, 0] = vh['ofst']*0.02
             sz = 6 if vh['sz'] == 0 else 8
             vtr = bs.unpack_from(('s'+str(sz))*ng, msg, i)
             i += sz*ng
+
             self.lc[inet].dtw = np.zeros(ng)
             for k in range(ng):
-                self.lc[inet].dtw[k] = self.sval(vtr[k], sz, 0.004)+trop_ofst
+                self.lc[inet].dtw[k] = self.sval(vtr[k], sz, 0.004)
 
         # STEC
         netmask = bs.unpack_from('u'+str(self.nsat_n), msg, i)[0]
@@ -1039,6 +1067,7 @@ class cssr:
         self.lc[inet].sat_n = self.decode_local_sat(netmask)
         self.lc[inet].nsat_n = nsat = len(self.lc[inet].sat_n)
         self.lc[inet].stec_quality = {}
+        self.udi[sCType.STEC] = head['udi']
         if dfm['stec'] & 2 > 0:  # functional term is available
             self.lc[inet].ci = {}
             self.lc[inet].stype = {}
@@ -1294,9 +1323,14 @@ class cssr:
         trph = 0
         trpw = 0
         if self.lc[inet].flg_trop & 2:
-            trph = 2.3+self.lc[inet].ct@[1, dlat, dlon, dlat*dlon]
+            p = [1, dlat, dlon, dlat*dlon]
+            trph = 2.3+self.lc[inet].ct[0, :]@p
+            trpw = self.lc[inet].ct[1, :]@p
         if self.lc[inet].flg_trop & 1:
-            trpw = self.lc[inet].dtw[self.grid_index-1]@self.grid_weight
+            if self.lc[inet].dth is not None:
+                trph += self.lc[inet].dth[self.grid_index-1]@self.grid_weight
+            if self.lc[inet].dtw is not None:
+                trpw += self.lc[inet].dtw[self.grid_index-1]@self.grid_weight
         return trph, trpw
 
     def get_stec(self, dlat=0.0, dlon=0.0):
@@ -1306,10 +1340,13 @@ class cssr:
         stec = np.zeros(nsat)
         for i in range(nsat):
             sat = self.lc[inet].sat_n[i]
-            if self.lc[inet].flg_stec & 2:
+            if self.lc[inet].flg_stec & 2:  # functional term
                 ci = self.lc[inet].ci[sat]
-                stec[i] = [1, dlat, dlon, dlat*dlon, dlat**2, dlon**2]@ci
-            if self.lc[inet].flg_stec & 1:
+                if len(ci) == 3:
+                    stec[i] = [1, dlat, dlon]@ci
+                else:
+                    stec[i] = [1, dlat, dlon, dlat*dlon, dlat**2, dlon**2]@ci
+            if self.lc[inet].flg_stec & 1:  # residual term
                 dstec = self.lc[inet].dstec[sat][self.grid_index-1] \
                     @ self.grid_weight
                 stec[i] += dstec
@@ -1419,6 +1456,7 @@ class cssre():
         self.dlen = 0
         self.msgtype = 0
         self.iodssr = 0
+        self.udi = np.zeros(sCType.MAX, dtype=int)
 
     def encode_mask(self, v, bitlen, ofst=1):
         """ encode n-bit mask with offset """
@@ -1428,3 +1466,11 @@ class cssre():
             d |= 1 << (bitlen-k-1)
 
         return d
+
+    def quality2qi(self, y):
+        """ convert from quality to quality index (class, value) """
+        n3 = np.log(3)
+        n_ = np.log(y*1000+1)/n3
+        cls_ = int(n_)
+        val_ = int((np.exp((n_-cls_)*n3)-1)/0.25)
+        return cls_, val_
