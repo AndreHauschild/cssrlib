@@ -1550,10 +1550,8 @@ def mapf(sE, a, b, c):
     return (1.0+a/(1.0+b/(1.0+c)))/(sE+(a/(sE+b/(sE+c))))
 
 
-def mapfParam(t, pos, el):
-    """ mapping function parameters based on lat,alt,time """
-    if pos[2] < -1e3 or pos[2] > 20e3 or el <= 0.0:
-        return 0.0, 0.0
+def mapfParam(t, lat):
+    """ mapping function parameters based on lat ,time """
     # lat = [15,30,45,60,75]
     # hs(average) [a,b,c] hs(amplitude) [a,b,c] wet [a,b,c]
     coef = np.array([
@@ -1567,14 +1565,11 @@ def mapfParam(t, pos, el):
         [1.4275268E-3, 1.5138625E-3, 1.4572752E-3, 1.5007428E-3, 1.7599082E-3],
         [4.3472961E-2, 4.6729510E-2, 4.3908931E-2, 4.4626982E-2, 5.4736038E-2],
     ])
-    lat = np.rad2deg(pos[0])
-
     y = (time2doy(t)-28.0)/365.25
     if lat < 0.0:
         y += 0.5
     cosy = np.cos(2.0*np.pi*y)
-    lat = np.abs(lat)
-    c = interpc(coef, lat)
+    c = interpc(coef, np.abs(np.rad2deg(lat)))
     ah = c[0:3]-c[3:6]*cosy
     aw = c[6:9]
 
@@ -1591,7 +1586,7 @@ def tropmapfNiell(t, pos, el, ah=None, aw=None):
         return 0.0, 0.0
 
     if ah is None or aw is None:
-        ah, aw = mapfParam(t, pos, el)
+        ah, aw = mapfParam(t, pos[0])
 
     aht = [2.53E-5, 5.49E-3, 1.14E-3]  # height correction
 

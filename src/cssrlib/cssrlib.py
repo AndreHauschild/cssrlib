@@ -14,7 +14,7 @@ import numpy as np
 from enum import IntEnum
 from cssrlib.gnss import gpst2time, rCST, prn2sat, uGNSS, gtime_t, rSigRnx
 from cssrlib.gnss import uSIG, uTYP, sat2prn, time2str, sat2id, timediff
-from cssrlib.gnss import copy_buff, time2gpst
+from cssrlib.gnss import copy_buff, time2gpst, mapfParam
 
 
 class sCSSRTYPE(IntEnum):
@@ -223,6 +223,9 @@ class local_corr:
         self.cbias = {}
         self.yaw = {}
         self.dyaw = {}
+        self.di = {}  # pbias discontinuity indicator
+        self.wl = {}  # pbias wide-lane indicator
+        self.si = {}  # pbias integer indicator
         self.iode = None
         self.dorb = None
         self.ddorb = None
@@ -1030,6 +1033,11 @@ class cssr:
             i += 6
             self.udi[sCType.TROP] = head['udi']
 
+            grid = self.grid[self.grid['nid'] == inet]
+            ah, aw = mapfParam(self.time, grid['lat'][0])
+            self.lc[inet].maph = ah
+            self.lc[inet].mapw = aw
+
         self.lc[inet].ct = np.zeros((2, 4))
 
         if dfm['trop'] & 2:  # functional term
@@ -1037,7 +1045,7 @@ class cssr:
             i += 2
             vt = bs.unpack_from_dict('s9', ['t00'], msg, i)
             i += 9
-            self.lc[inet].ct[0, 0] = self.sval(vt['t00'], 9, 0.004)
+            self.lc[inet].ct[0, 0] = self.sval(vt['t00'], 9, 0.004)+2.3
             if ttype > 0:
                 vt = bs.unpack_from_dict('s7s7', ['t01', 't10'], msg, i)
                 i += 14

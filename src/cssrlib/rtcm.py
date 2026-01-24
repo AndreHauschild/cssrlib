@@ -8,6 +8,7 @@ RTCM 3 decoder
     Integrity for High Accuracy GNSS based Applications
     - Version 0.91, 2025
 [3] IGS SSR Format version 1.00, 2020
+[4] RTCM SSR Standard, Draft version 0.9.5 Amendment 2, 2026
 
 @author Rui Hirokawa
 
@@ -238,7 +239,10 @@ class rtcm(cssr):
         self.sc_t = {sCSSR.ORBIT: sCType.ORBIT, sCSSR.CLOCK: sCType.CLOCK,
                      sCSSR.MASK: sCType.MASK, sCSSR.CBIAS: sCType.CBIAS,
                      sCSSR.PBIAS: sCType.PBIAS, sCSSR.URA: sCType.URA,
-                     sCSSR.GRID: sCType.TROP, sCSSR.STEC: sCType.STEC}
+                     sCSSR.GRID: sCType.TROP, sCSSR.STEC: sCType.STEC,
+                     sRTCM.SSR_PBIAS: sCType.PBIAS,
+                     sRTCM.SSR_STEC: sCType.STEC,
+                     }
 
         self.glo_bias = None  # GLONASS receiver bias
         self.pos_arp = None  # receiver position
@@ -297,11 +301,11 @@ class rtcm(cssr):
                 break
         return sys, ssr
 
-    def svid2sat(self, sys, svid, f_rtcm=False):
+    def svid2sat(self, sys, svid):
         """ convert svid to sat """
         prn = svid
         if sys == uGNSS.QZS:
-            prn += uGNSS.MINPRNQZS-11 if f_rtcm else uGNSS.MINPRNQZS-1
+            prn += uGNSS.MINPRNQZS-1
         elif sys == uGNSS.SBS:
             prn += uGNSS.MINPRNSBS-1
         return prn2sat(sys, prn)
@@ -852,13 +856,15 @@ class rtcm(cssr):
             self.sat_b = []
             self.lc[inet].pbias = {}
             self.lc[inet].si = {}
-            self.lc[inet].cnt = {}
+            self.lc[inet].di = {}
             self.lc[inet].wl = {}
 
         self.iodssr = v['iodssr']
         self.udi[sCType.PBIAS] = v['udi']
         self.mi = v['mi']
         self.iyaw = v['iyaw']
+
+        inet = self.inet
 
         for k in range(nsat):
             i, sat_ = self.decode_sat(msg, i, sys)
@@ -881,7 +887,7 @@ class rtcm(cssr):
             if sat_ not in self.lc[inet].pbias:
                 self.lc[inet].pbias[sat_] = {}
                 self.lc[inet].si[sat_] = {}
-                self.lc[inet].cnt[sat_] = {}
+                self.lc[inet].di[sat_] = {}
                 self.lc[inet].wl[sat_] = {}
 
             for j in range(nsig):
@@ -898,12 +904,12 @@ class rtcm(cssr):
 
                 # signal discontinuity indicator: DF485
                 # phase bias: DF482
-                cnt, pb = bs.unpack_from('u4s20', msg, i)
+                di, pb = bs.unpack_from('u4s20', msg, i)
                 i += 24
 
                 self.lc[inet].pbias[sat_][rsig] = self.sval(pb, 20, 1e-4)
                 self.lc[inet].si[sat_][rsig] = si
-                self.lc[inet].cnt[sat_][rsig] = cnt
+                self.lc[inet].di[sat_][rsig] = di
 
         self.iodssr_c[sCType.PBIAS] = v['iodssr']
         self.lc[inet].cstat |= (1 << sCType.PBIAS)
@@ -1289,8 +1295,16 @@ class rtcm(cssr):
                 ng = self.lc[inet].ng
                 ofst = self.lc[inet].ofst
                 for k in range(ofst, ofst+ng):
-                    self.fh.write(f" res(d/w)[m] {dth[k]:7.4f}" +
-                                  f" {dtw[k]:7.4f}\n")
+                    self.fh.write(" res(d/w)[m]")
+                    if dth is not None:
+                        self.fh.write(f" {dth[k]:7.4f}")
+                    else:
+                        self.fh.write("      ")
+                    if dtw is not None:
+                        self.fh.write(f" {dtw[k]:7.4f}")
+                    else:
+                        self.fh.write("      ")
+                    self.fh.write("\n")
 
         if self.subtype == sRTCM.SSR_STEC:
             self.fh.write(f" IODSSR:{self.iodssr} ProvID:{self.pid} " +
@@ -1300,7 +1314,7 @@ class rtcm(cssr):
                 for sat in self.lc[inet].sat_n:
                     self.fh.write(f"  {sat2id(sat):s}")
                     ci = self.lc[inet].ci[sat]
-                    self.fh.write(f" c00 {ci[0]:7.4f}")
+                    self.fh.write(f" c00 {ci[0]:8.4f}")
                     if self.lc[inet].stype[sat] > 0:
                         self.fh.write(f" c01 {ci[1]:7.4f} c10 {ci[2]:7.4f}")
                     self.fh.write("\n")
@@ -1366,7 +1380,7 @@ class rtcm(cssr):
                     self.fh.write("{:s}\t{:7.4f}\t{:1d}\t{:2d}\t"
                                   .format(sig, self.lc[0].pbias[sat_][sig],
                                           self.lc[0].si[sat_][sig],
-                                          self.lc[0].cnt[sat_][sig]))
+                                          self.lc[0].di[sat_][sig]))
                 self.fh.write("\n")
 
         if self.subtype == sRTCM.ANT_DESC:
@@ -2520,16 +2534,21 @@ class rtcm(cssr):
         if rmi:  # residual information part
             ofst, ng, n, m = bs.unpack_from('u12u12u4u4', msg, i)
             i += 32
-            rh = np.zeros(ofst+ng)
-            rw = np.zeros(ofst+ng)
+
+            rh = np.zeros(ofst+ng) if n > 0 else None
+            rw = np.zeros(ofst+ng) if m > 0 else None
 
             for k in range(ofst, ofst+ng):
-                rh_, rw_ = bs.unpack_from(f's{n}s{m}', msg, i)
-                i += n+m
-                # hydrostatic grid point residual [m]
-                rh[k] = self.sval(rh_, n, 0.1e-3)
-                # wet grid point residual [m]
-                rw[k] = self.sval(rw_, m, 0.1e-3)
+                if n > 0:
+                    rh_ = bs.unpack_from(f's{n}', msg, i)[0]
+                    i += n
+                    # hydrostatic grid point residual [m]
+                    rh[k] = self.sval(rh_, n, 0.1e-3)
+                if m > 0:
+                    rw_ = bs.unpack_from(f's{m}', msg, i)[0]
+                    i += m
+                    # wet grid point residual [m]
+                    rw[k] = self.sval(rw_, m, 0.1e-3)
 
         # functional term parameters
         self.lc[inet].ct = ct
@@ -2552,8 +2571,10 @@ class rtcm(cssr):
         i, v = self.decode_head(msg, i, sys)
         # Grid ID DF+22
         # Polynomial Model Indicator DF+96
-        # Residual Model Indicator
-        gid, pmi, rmi, satmask = bs.unpack_from('u10b1b1u64', msg, i)
+        # Residual Model Indicator DF+099
+        # Satellite mask DF394
+        self.gid, self.pmi, self.rmi, satmask = bs.unpack_from(
+            'u10b1b1u64', msg, i)
         i += 76
         # Zenith-mapped STEC Polynomial Gradient Indicator DF+60
         svid, nsat = self.decode_mask(satmask, 64, 1)
@@ -2562,10 +2583,10 @@ class rtcm(cssr):
             # sat[k] = self.svid2sat(sys, svid[k], True)
             sat[k] = self.svid2sat(sys, svid[k])
 
-        inet = gid
+        inet = self.gid
         self.lc[inet].sat_n = sat
 
-        if pmi:  # polynomial model information part
+        if self.pmi:  # polynomial model information part
             self.pgi = bs.unpack_from('b1', msg, i)[0]
             i += 1
             sz = 3 if self.pgi else 1
@@ -2587,7 +2608,7 @@ class rtcm(cssr):
                 else:
                     self.lc[inet].stype[sat_] = 0
 
-        if rmi:  # residual model information part
+        if self.rmi:  # residual model information part
             ofst, ng, rlen = bs.unpack_from('u12u12u5', msg, i)
             i += 29
             if rlen > 0:
@@ -2612,10 +2633,6 @@ class rtcm(cssr):
 
             self.lc[inet].ng = ng
             self.lc[inet].ofst = ofst
-
-        self.gid = gid
-        self.pmi = pmi
-        self.rmi = rmi
 
         return i
 
@@ -3516,7 +3533,11 @@ class rtcme(cssre):
         self.sc_t = {sCSSR.ORBIT: sCType.ORBIT, sCSSR.CLOCK: sCType.CLOCK,
                      sCSSR.MASK: sCType.MASK, sCSSR.CBIAS: sCType.CBIAS,
                      sCSSR.PBIAS: sCType.PBIAS, sCSSR.URA: sCType.URA,
-                     sCSSR.GRID: sCType.TROP, sCSSR.STEC: sCType.STEC}
+                     sCSSR.GRID: sCType.TROP, sCSSR.STEC: sCType.STEC,
+                     sRTCM.SSR_PBIAS: sCType.PBIAS,
+                     sRTCM.SSR_TROP: sCType.TROP,
+                     sRTCM.SSR_STEC: sCType.STEC,
+                     }
 
     def get_ssr_sys(self, msgtype):
         """ get system from ssr message type """
@@ -3846,6 +3867,15 @@ class rtcme(cssre):
                 break
         return sys, msm
 
+    def sat2svid(self, sat):
+        """ convert sat number to svid """
+        sys, svid = sat2prn(sat)
+        if sys == uGNSS.QZS:
+            svid -= uGNSS.MINPRNQZS-1
+        elif sys == uGNSS.SBS:
+            svid -= uGNSS.MINPRNSBS-1
+        return svid
+
     def encode_msm_time(self, sys, time):
         """ decode msm time """
         if sys == uGNSS.GLO:
@@ -4077,11 +4107,15 @@ class rtcme(cssre):
             lon_i = int(lon/1e-3)
             alt_i = int((alt+1000)/12.5)
 
+            # Latitude of Reference Point DF+024
+            # Longitude of Reference Point DF+025
+            # Ellipsoidal Height of Reference Point DF+026
+            # Number of Relative Points: DF+027
             bs.pack_into('s18s19u10u12u8', msg, i, lat_i, lon_i, alt_i,
-                         self.ofst, self.ng)
+                         self.ofst, self.ng-1)
             i += 67
 
-            for k in range(self.ng):
+            for k in range(self.ng-1):
                 gid, ofst, lat_, lon_, alt_ = grid[k]
                 dlat = lat_-lat
                 dlon = lon_-lon
@@ -4297,7 +4331,7 @@ class rtcme(cssre):
         sys = self.get_ssr_sys(self.msgtype)
         i = self.encode_head(msg, i, sys)
 
-        for sat in self.sat_n:
+        for sat in self.lc[inet].cbias:
             sys_, _ = sat2prn(sat)
             if sys_ != sys:
                 continue
@@ -4320,7 +4354,17 @@ class rtcme(cssre):
         sys = self.get_ssr_sys(self.msgtype)
         i = self.encode_head(msg, i, sys)
 
-        for sat in self.sat_n:
+        inet = self.inet
+
+        nsat = 0
+        for sat in self.lc[inet].pbias:
+            sys_, _ = sat2prn(sat)
+            if sys_ == sys:
+                nsat += 1
+        bs.pack_into('u6', msg, i, nsat)
+        i += 6
+
+        for sat in self.lc[inet].pbias:
             sys_, _ = sat2prn(sat)
             if sys_ != sys:
                 continue
@@ -4340,8 +4384,11 @@ class rtcme(cssre):
 
                 pb = int(pbias[rsig_]/1e-4)
                 code = self.rsig2code(rsig_)
-                si = self.lc[inet].si[sat][rsig_]
-                cnt = self.lc[inet].cnt[sat][rsig_]
+                if sat in self.lc[inet].si:
+                    si = self.lc[inet].si[sat][rsig_]
+                else:
+                    si = 0
+                di = self.lc[inet].di[sat][rsig_]
 
                 bs.pack_into('u5b1', msg, i, code, si)
                 i += 6
@@ -4351,8 +4398,165 @@ class rtcme(cssre):
                     bs.pack_into('u2', msg, i, wl)
                     i += 2
 
-                bs.pack_into('u4s20', msg, i, cnt, pb)
+                bs.pack_into('u4s20', msg, i, di, pb)
                 i += 24
+
+        return i
+
+    def encode_ssr_trop(self, msg, i, inet=0):
+        """ encode SSR Tropspheric Correction Message """
+        i = self.encode_head(msg, i)
+        inet = self.gid
+        rmi = self.lc[inet].flg_trop & 1
+        # Grid ID: DF+022
+        # Residual model indicator DF+009
+        bs.pack_into('u10b1', msg, i, self.gid, rmi)
+        i += 11
+
+        # mapping function parameters
+        ah, bh, ch = self.lc[inet].maph
+        aw, bw, cw = self.lc[inet].mapw
+
+        dah = int((ah-0.00118)/2.5e-7)
+        dbh = int((bh-0.00298)/5e-6)
+        dch = int((ch-0.0682)/2e-4)
+        daw = int((aw-0.000104)/1e-6)
+        dbw = int((bw-0.0015)/2.5e-5)
+        dcw = int((cw-0.048)/2e-3)
+
+        # atmospheric model part
+        bs.pack_into(
+            's11s9s9s13s6s5', msg, i, dah, dbh, dch, daw, dbw, dcw)
+        i += 53
+
+        # functional term parameters
+        ct = self.lc[inet].ct
+
+        # hydrostatic
+        ct00h = int((ct[0, 0]-2.3)/0.1e-3)
+        ct01h = int(ct[0, 1]/0.01e-3)
+        ct10h = int(ct[0, 2]/0.01e-3)
+        # wet
+        ct00w = int((ct[1, 0]-0.252)/0.1e-3)
+        ct01w = int(ct[1, 1]/0.01e-3)
+        ct10w = int(ct[1, 2]/0.01e-3)
+
+        bs.pack_into('s13s15s15', msg, i, ct00h, ct10h, ct01h)
+        i += 43
+        bs.pack_into('s13s15s15', msg, i, ct00w, ct10w, ct01w)
+        i += 43
+
+        n = self.nlen
+        m = self.mlen
+
+        if n > 0:
+            rh = self.lc[inet].dth
+        if m > 0:
+            rw = self.lc[inet].dtw
+
+        if rmi:  # residual information part
+            ng = self.lc[inet].ng
+            ofst = self.lc[inet].ofst
+
+            bs.pack_into('u12u12u4u4', msg, i, ofst, ng, n, m)
+            i += 32
+
+            for k in range(ofst, ofst+ng):
+                if n > 0:
+                    rh_ = int(rh[k]/0.1e-3)
+                    bs.pack_into(f's{n}', msg, i, rh_)
+                    i += n
+                if m > 0:
+                    rw_ = int(rw[k]/0.1e-3)
+                    bs.pack_into(f's{m}', msg, i, rw_)
+                    i += m
+
+        return i
+
+    def encode_ssr_iono(self, msg, i, inet=0):
+        """ encode SSR Regional Ionospheric Correction message (E96,E97,E98,E99,E100) """
+        sys_m = self.get_ssr_sys(self.msgtype)
+        i = self.encode_head(msg, i, sys_m)
+
+        inet = self.inet
+
+        pmi = (self.lc[inet].flg_stec >> 1) & 1
+        rmi = self.lc[inet].flg_stec & 1
+
+        # Grid ID DF+22
+        # Polynomial Model Indicator DF+96
+        # Residual Model Indicator
+        bs.pack_into('u10b1b1', msg, i, self.gid, pmi, rmi)
+        i += 12
+
+        inet = self.gid
+
+        svid = []
+        sat = []
+        stype = 0
+        for sat_ in self.lc[inet].ci:
+            sys, _ = sat2prn(sat_)
+            if sys != sys_m:
+                continue
+            sat.append(sat_)
+            svid.append(self.sat2svid(sat_))
+            if stype < self.lc[inet].stype[sat_]:
+                stype = self.lc[inet].stype[sat_]
+
+        satmask = self.encode_mask(svid, 64)
+        bs.pack_into('u64', msg, i, satmask)
+        i += 64
+
+        # Zenith-mapped STEC Polynomial Gradient Indicator DF+60
+        if pmi:  # polynomial model information part
+            pgi = stype > 0
+            bs.pack_into('b1', msg, i, pgi)
+            i += 1
+
+            for sat_ in sat:
+                ci = self.lc[inet].ci[sat_]
+
+                c00i = int(ci[0]/0.01)
+                bs.pack_into('s17', msg, i, c00i)
+                i += 17
+                if pgi:
+                    c01i = int(ci[1]/1e-3)
+                    c10i = int(ci[2]/1e-3)
+                    bs.pack_into('s18s18', msg, i, c01i, c10i)
+                    i += 36
+
+        if rmi:  # residual model information part
+            ng = self.lc[inet].ng
+            ofst = self.lc[inet].ofst
+            rlen = 18  # TBD
+            scl = 2e-3  # TBD
+
+            grid = self.grid[self.grid['nid'] == self.inet]
+            lat0 = grid[0]['lat']
+            lon0 = grid[0]['lon']
+
+            bs.pack_into('u12u12u5', msg, i, ofst, ng, rlen)
+            i += 29
+            if rlen > 0:
+                # Zenith-mapped STEC Grid Point Residual
+                # Resolution Scale Factor Exponent
+                sf = np.log(scl/1e-3)/np.log(2)
+                bs.pack_into('u3', msg, i, sf)  # DF+073
+                i += 3
+
+            fmt = 's'+str(rlen)
+            for sat_ in sat:
+                ci = self.lc[inet].ci[sat_]
+                for j in range(ofst, ofst+ng):
+                    dstec = self.lc[inet].dstec[sat_][j]
+                    if np.abs(ci[3]) > 0:
+                        dlat = grid[j]['lat']-lat0
+                        dlon = grid[j]['lon']-lon0
+                        dstec += [dlat*dlon, dlat**2, dlon**2]@ci[3:]
+
+                    res = int(dstec/scl)
+                    bs.pack_into(fmt, msg, i, res)
+                    i += rlen
 
         return i
 
@@ -4397,9 +4601,8 @@ class rtcme(cssre):
             self.subtype = sRTCM.SSR_SATANT
             # i = self.encode_ssr_satant(msg, i)
         elif self.msgtype >= 85 and self.msgtype < 90:
-            if not self.mask_pbias:
-                self.subtype = sRTCM.SSR_PBIAS
-                i = self.encode_cssr_pbias(msg, i)
+            self.subtype = sRTCM.SSR_PBIAS
+            i = self.encode_cssr_pbias(msg, i)
         elif self.msgtype >= 90 and self.msgtype < 95:
             self.subtype = sRTCM.SSR_PBIAS_EX
             # i = self.encode_ssr_pbias_ex(msg, i)
