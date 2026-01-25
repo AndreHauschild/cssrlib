@@ -1288,7 +1288,7 @@ def sys2char(sys):
     gnss_tbl = {uGNSS.GPS: 'G', uGNSS.GLO: 'R', uGNSS.GAL: 'E', uGNSS.BDS: 'C',
                 uGNSS.QZS: 'J', uGNSS.SBS: 'S', uGNSS.IRN: 'I'}
 
-    if len(sys) == 1:
+    if type(sys) == uGNSS:
         s = '?' if sys not in gnss_tbl else gnss_tbl[sys]
     else:
         s = []
