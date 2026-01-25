@@ -1273,10 +1273,14 @@ def char2sys(c):
     gnss_tbl = {'G': uGNSS.GPS, 'R': uGNSS.GLO, 'E': uGNSS.GAL, 'C': uGNSS.BDS,
                 'J': uGNSS.QZS, 'S': uGNSS.SBS, 'I': uGNSS.IRN}
 
-    if c not in gnss_tbl:
-        return uGNSS.NONE
+    if len(c) == 1:
+        s = uGNSS.NONE if c not in gnss_tbl else gnss_tbl[c]
     else:
-        return gnss_tbl[c]
+        s = []
+        for k in range(len(c)):
+            u = uGNSS.NONE if c[k] not in gnss_tbl else gnss_tbl[c[k]]
+            s.append(u)
+    return s
 
 
 def sys2char(sys):
@@ -1284,10 +1288,14 @@ def sys2char(sys):
     gnss_tbl = {uGNSS.GPS: 'G', uGNSS.GLO: 'R', uGNSS.GAL: 'E', uGNSS.BDS: 'C',
                 uGNSS.QZS: 'J', uGNSS.SBS: 'S', uGNSS.IRN: 'I'}
 
-    if sys not in gnss_tbl:
-        return "?"
+    if len(sys) == 1:
+        s = '?' if sys not in gnss_tbl else gnss_tbl[sys]
     else:
-        return gnss_tbl[sys]
+        s = []
+        for sys_ in sys:
+            u = '?' if sys_ not in gnss_tbl else gnss_tbl[sys_]
+            s.append(u)
+    return s
 
 
 def sys2str(sys):

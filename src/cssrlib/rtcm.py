@@ -63,6 +63,7 @@ class sRTCM(IntEnum):
     SSR_TROP = 95
     SSR_STEC = 96
     SSR_HCLK = 46
+    SSR_CBIAS = 68
     SSR_PBIAS = 85
     SSR_PBIAS_EX = 90
 
@@ -203,115 +204,157 @@ class Integrity():
         self.mm_param = None
 
 
-class rtcm(cssr):
-    """ class to decode RTCM3 messages """
+class rtcmUtil:
+    """ class to define common parameters and utilities for RTCM """
 
-    def __init__(self, foutname=None):
-        super().__init__(foutname)
-        self.len = 0
-        self.monlevel = 1
-        self.sysref = -1
-        self.nsig_max = 4
-        self.lock = {}
-        self.mask_pbias = False
+    msm_t = {
+        uGNSS.GPS: 1071, uGNSS.GLO: 1081, uGNSS.GAL: 1091,
+        uGNSS.SBS: 1101, uGNSS.QZS: 1111, uGNSS.BDS: 1121
+    }
 
-        self.pid = 0  # SSR Provider ID
-        self.sid = 0  # SSR Solution Type
-        self.mi = False
+    ssr_t = {
+        uGNSS.GPS: 1057, uGNSS.GLO: 1063, uGNSS.GAL: 1240,
+        uGNSS.QZS: 1246, uGNSS.SBS: 1252, uGNSS.BDS: 1258
+    }
 
-        self.nrtk_r = {}
+    eph_t = {
+        uGNSS.GPS: 1019, uGNSS.GLO: 1020, uGNSS.BDS: 1042,
+        uGNSS.QZS: 1044, uGNSS.GAL: 1046
+    }
 
-        self.msm_t = {
-            uGNSS.GPS: 1071, uGNSS.GLO: 1081, uGNSS.GAL: 1091,
-            uGNSS.SBS: 1101, uGNSS.QZS: 1111, uGNSS.BDS: 1121
-        }
+    sc_t = {sCSSR.ORBIT: sCType.ORBIT, sCSSR.CLOCK: sCType.CLOCK,
+            sCSSR.MASK: sCType.MASK, sCSSR.CBIAS: sCType.CBIAS,
+            sCSSR.PBIAS: sCType.PBIAS, sCSSR.URA: sCType.URA,
+            sCSSR.GRID: sCType.TROP, sCSSR.STEC: sCType.STEC,
+            sRTCM.SSR_PBIAS: sCType.PBIAS,
+            sRTCM.SSR_TROP: sCType.TROP,
+            sRTCM.SSR_STEC: sCType.STEC,
+            }
 
-        self.ssr_t = {
-            uGNSS.GPS: 1057, uGNSS.GLO: 1063, uGNSS.GAL: 1240,
-            uGNSS.QZS: 1246, uGNSS.SBS: 1252, uGNSS.BDS: 1258
-        }
+    ssrtype_t = {
+        1057: (uGNSS.GPS, sCType.ORBIT),
+        1058: (uGNSS.GPS, sCType.CLOCK),
+        1059: (uGNSS.GPS, sCType.CBIAS),
+        1060: (uGNSS.GPS, sCType.OC),
+        1061: (uGNSS.GPS, sCType.URA),
+        1062: (uGNSS.GPS, sCType.HCLOCK),
+        41: (uGNSS.GLO, sCType.ORBIT),
+        42: (uGNSS.GLO, sCType.CLOCK),
+        43: (uGNSS.GLO, sCType.CBIAS),
+        44: (uGNSS.GLO, sCType.OC),
+        45: (uGNSS.GLO, sCType.URA),
+        46: (uGNSS.GLO, sCType.HCLOCK),
+        60: (uGNSS.NONE, sCType.META),
+        61: (uGNSS.NONE, sCType.GRID),
+        62: (uGNSS.GAL, sCType.ORBIT),
+        63: (uGNSS.BDS, sCType.ORBIT),
+        64: (uGNSS.QZS, sCType.ORBIT),
+        65: (uGNSS.GAL, sCType.CLOCK),
+        66: (uGNSS.BDS, sCType.CLOCK),
+        67: (uGNSS.QZS, sCType.CLOCK),
+        68: (uGNSS.GAL, sCType.CBIAS),
+        69: (uGNSS.BDS, sCType.CBIAS),
+        70: (uGNSS.QZS, sCType.CBIAS),
+        71: (uGNSS.GAL, sCType.OC),
+        72: (uGNSS.BDS, sCType.OC),
+        73: (uGNSS.QZS, sCType.OC),
+        74: (uGNSS.GAL, sCType.URA),
+        75: (uGNSS.BDS, sCType.URA),
+        76: (uGNSS.QZS, sCType.URA),
+        77: (uGNSS.GAL, sCType.HCLOCK),
+        78: (uGNSS.BDS, sCType.HCLOCK),
+        79: (uGNSS.QZS, sCType.HCLOCK),
+        80: (uGNSS.GPS, sCType.SATANT),
+        81: (uGNSS.GLO, sCType.SATANT),
+        82: (uGNSS.GAL, sCType.SATANT),
+        83: (uGNSS.BDS, sCType.SATANT),
+        84: (uGNSS.QZS, sCType.SATANT),
+        85: (uGNSS.GPS, sCType.PBIAS),
+        86: (uGNSS.GLO, sCType.PBIAS),
+        87: (uGNSS.GAL, sCType.PBIAS),
+        88: (uGNSS.BDS, sCType.PBIAS),
+        89: (uGNSS.QZS, sCType.PBIAS),
+        90: (uGNSS.GPS, sCType.PBIAS_EX),
+        91: (uGNSS.GLO, sCType.PBIAS_EX),
+        92: (uGNSS.GAL, sCType.PBIAS_EX),
+        93: (uGNSS.BDS, sCType.PBIAS_EX),
+        94: (uGNSS.QZS, sCType.PBIAS_EX),
+        95: (uGNSS.NONE, sCType.TROP),
+        96: (uGNSS.GPS, sCType.STEC),
+        97: (uGNSS.GLO, sCType.STEC),
+        98: (uGNSS.GAL, sCType.STEC),
+        99: (uGNSS.BDS, sCType.STEC),
+        100: (uGNSS.QZS, sCType.STEC),
+    }
 
-        self.eph_t = {
-            uGNSS.GPS: 1019, uGNSS.GLO: 1020, uGNSS.BDS: 1042,
-            uGNSS.QZS: 1044, uGNSS.GAL: 1046
-        }
+    def mt2sct(self, s):
+        """ SSR Message type to SCType """
+        return self.ssrtype_t[s]
 
-        self.sc_t = {sCSSR.ORBIT: sCType.ORBIT, sCSSR.CLOCK: sCType.CLOCK,
-                     sCSSR.MASK: sCType.MASK, sCSSR.CBIAS: sCType.CBIAS,
-                     sCSSR.PBIAS: sCType.PBIAS, sCSSR.URA: sCType.URA,
-                     sCSSR.GRID: sCType.TROP, sCSSR.STEC: sCType.STEC,
-                     sRTCM.SSR_PBIAS: sCType.PBIAS,
-                     sRTCM.SSR_STEC: sCType.STEC,
-                     }
+    def sct2mt(self, sct: sCType, sys: uGNSS = uGNSS.NONE):
+        """ SCType to SSR Message type """
+        for k, v in self.ssrtype_t.items():
+            if v[0] == sys and v[1] == sct:
+                return k
+        return -1
 
-        self.glo_bias = None  # GLONASS receiver bias
-        self.pos_arp = None  # receiver position
-        self.ant_desc = "unknown"
-        self.ant_id = ""
-        self.ant_serial = ""
-        self.rcv_type = ""
-        self.firm_ver = "unknown"
-        self.rcv_serial = ""
+    def get_ssr_sys(self, msgtype):
+        """ get system from ssr message type """
+        if msgtype == 4076:
+            return self.sysref
+        else:
+            if msgtype >= 1057 and msgtype < 1063:
+                return uGNSS.GPS
+            elif msgtype >= 1063 and msgtype < 1069:
+                return uGNSS.GLO
+            elif msgtype >= 1240 and msgtype < 1246:
+                return uGNSS.GAL
+            elif msgtype >= 1246 and msgtype < 1252:
+                return uGNSS.QZS
+            elif msgtype >= 1252 and msgtype < 1258:
+                return uGNSS.SBS
+            elif msgtype >= 1258 and msgtype < 1264:
+                return uGNSS.BDS
+            elif msgtype >= 1265 and msgtype < 1271:  # proposed phase bias
+                tbl_t = {1265: uGNSS.GPS, 1266: uGNSS.GLO, 1267: uGNSS.GAL,
+                         1268: uGNSS.QZS, 1269: uGNSS.SBS, 1270: uGNSS.BDS}
+                return tbl_t[msgtype]
+            # RTCM SSR test messages
+            elif msgtype >= 41 and msgtype < 47:  # OBC
+                return uGNSS.GLO
+            elif msgtype in [62, 65, 68, 71, 74, 77]:  # OBC
+                return uGNSS.GAL
+            elif msgtype in [63, 66, 69, 72, 75, 78]:  # OBC
+                return uGNSS.BDS
+            elif msgtype in [64, 67, 70, 73, 76, 79]:  # OBC
+                return uGNSS.QZS
+            elif msgtype >= 80 and msgtype < 85:  # proposed satellite antenna
+                tbl_t = {80: uGNSS.GPS, 81: uGNSS.GLO, 82: uGNSS.GAL,
+                         83: uGNSS.BDS, 84: uGNSS.QZS}
+                return tbl_t[msgtype]
+            elif msgtype >= 85 and msgtype < 90:  # proposed phase bias
+                tbl_t = {85: uGNSS.GPS, 86: uGNSS.GLO, 87: uGNSS.GAL,
+                         88: uGNSS.BDS, 89: uGNSS.QZS}
+                return tbl_t[msgtype]
+            elif msgtype >= 90 and msgtype < 95:  # proposed phase bias
+                tbl_t = {90: uGNSS.GPS, 91: uGNSS.GLO, 92: uGNSS.GAL,
+                         93: uGNSS.BDS, 94: uGNSS.QZS}
+                return tbl_t[msgtype]
+            elif msgtype >= 96 and msgtype < 101:  # regional iono
+                tbl_t = {96: uGNSS.GPS, 97: uGNSS.GLO, 98: uGNSS.GAL,
+                         99: uGNSS.BDS, 100: uGNSS.QZS}
+            elif msgtype in [60, 61, 95]:  # METADATA, grid definition, trop
+                return uGNSS.NONE
+            elif msgtype in [11, 12, 13]:  # RTCM SC-134 test messages
+                return uGNSS.NONE
+            else:
+                print(f"definition of {msgtype} is missing")
+                # return uGNSS.NONE
 
-        self.antc = {}
-        self.integ = Integrity()
-        self.test_mode = False  # for interop testing in SC134
+            return tbl_t[msgtype]
 
-    def is_ssrtype(self, msgtype, tstmsg=False):
-        """ check if the message type is MSM """
-        for sys_ in self.ssr_t.keys():
-            if msgtype >= self.ssr_t[sys_] and msgtype <= self.ssr_t[sys_]+6:
-                return True
-            if tstmsg and msgtype >= 60 and msgtype <= 100:  # SSR test message
-                return True
-        return False
-
-    def is_msmtype(self, msgtype):
-        """ check if the message type is MSM """
-        for sys_ in self.msm_t.keys():
-            if msgtype >= self.msm_t[sys_] and msgtype <= self.msm_t[sys_]+6:
-                return True
-        return False
-
-    def adjustweek(self, week: int, tref: gtime_t):
-        """ adjust week number considering reference time """
-        week_, _ = time2gpst(tref)
-        week_ref = (week_//1024)*1024
-        return (week % 1024) + week_ref
-
-    def msmtype(self, msgtype):
-        """ get system and msm type from message type """
-        sys = uGNSS.NONE
-        msm = 0
-        for sys_ in self.msm_t.keys():
-            if msgtype >= self.msm_t[sys_] and msgtype <= self.msm_t[sys_]+6:
-                sys = sys_
-                msm = msgtype-self.msm_t[sys_]+1
-                break
-        return sys, msm
-
-    def ssrtype(self, msgtype):
-        """ get system and ssr type from message type """
-        sys = uGNSS.NONE
-        ssr = 0
-        for sys_ in self.ssr_t.keys():
-            if msgtype >= self.ssr_t[sys_] and msgtype <= self.ssr_t[sys_]+6:
-                sys = sys_
-                ssr = msgtype-self.ssr_t[sys_]+1
-                break
-        return sys, ssr
-
-    def svid2sat(self, sys, svid):
-        """ convert svid to sat """
-        prn = svid
-        if sys == uGNSS.QZS:
-            prn += uGNSS.MINPRNQZS-1
-        elif sys == uGNSS.SBS:
-            prn += uGNSS.MINPRNSBS-1
-        return prn2sat(sys, prn)
-
-    def ssig2rsig(self, sys: uGNSS, utyp: uTYP, ssig):
-        """ convert ssig to rSigRnx """
+    def rsig2code(self, rsig):
+        """ convert rSigRnx to RTCM SSR code """
         gps_tbl = {
             0: uSIG.L1C,
             1: uSIG.L1P,
@@ -418,8 +461,10 @@ class rtcm(cssr):
             uGNSS.SBS: sbs_tbl,
         }
 
-        usig_tbl = usig_tbl_[sys]
-        return rSigRnx(sys, utyp, usig_tbl[ssig])
+        usig_tbl = usig_tbl_[rsig.sys]
+        dic = {usig_tbl[s]: s for s in usig_tbl}
+
+        return dic[rsig.sig]
 
     def msm2rsig(self, sys: uGNSS, utyp: uTYP, ssig):
         """ convert ssig to rSigRnx for MSM """
@@ -538,6 +583,81 @@ class rtcm(cssr):
         usig_tbl = usig_tbl_[sys]
         return rSigRnx(sys, utyp, usig_tbl[ssig])
 
+    def is_ssrtype(self, msgtype, tstmsg=False):
+        """ check if the message type is MSM """
+        for sys_ in self.ssr_t.keys():
+            if msgtype >= self.ssr_t[sys_] and msgtype <= self.ssr_t[sys_]+6:
+                return True
+            if tstmsg and msgtype >= 60 and msgtype <= 100:  # SSR test message
+                return True
+        return False
+
+    def is_msmtype(self, msgtype):
+        """ check if the message type is MSM """
+        for sys_ in self.msm_t.keys():
+            if msgtype >= self.msm_t[sys_] and msgtype <= self.msm_t[sys_]+6:
+                return True
+        return False
+
+    def msmtype(self, msgtype):
+        """ get system and msm type from message type """
+        sys = uGNSS.NONE
+        msm = 0
+        for sys_ in self.msm_t.keys():
+            if msgtype >= self.msm_t[sys_] and msgtype <= self.msm_t[sys_]+6:
+                sys = sys_
+                msm = msgtype-self.msm_t[sys_]+1
+                break
+        return sys, msm
+
+    def nrtktype(self, msgtype):
+        """ get system from nrtk message type """
+        gnss_t = {1030: uGNSS.GPS, 1031: uGNSS.GLO,
+                  1303: uGNSS.BDS, 1304: uGNSS.GAL, 1305: uGNSS.QZS}
+
+        sys = uGNSS.NONE
+        nrtk = 0
+        if msgtype in gnss_t.keys():
+            nrtk = 1
+            sys = gnss_t[msgtype]
+
+        return sys, nrtk
+
+    def ssrtype(self, msgtype):
+        """ get system and ssr type from message type """
+        sys = uGNSS.NONE
+        ssr = 0
+        for sys_ in self.ssr_t.keys():
+            if msgtype >= self.ssr_t[sys_] and msgtype <= self.ssr_t[sys_]+6:
+                sys = sys_
+                ssr = msgtype-self.ssr_t[sys_]+1
+                break
+        return sys, ssr
+
+    def sat2svid(self, sat):
+        """ convert sat number to svid """
+        sys, svid = sat2prn(sat)
+        if sys == uGNSS.QZS:
+            svid -= uGNSS.MINPRNQZS-1
+        elif sys == uGNSS.SBS:
+            svid -= uGNSS.MINPRNSBS-1
+        return svid
+
+    def svid2sat(self, sys, svid):
+        """ convert svid to sat """
+        prn = svid
+        if sys == uGNSS.QZS:
+            prn += uGNSS.MINPRNQZS-1
+        elif sys == uGNSS.SBS:
+            prn += uGNSS.MINPRNSBS-1
+        return prn2sat(sys, prn)
+
+    def adjustweek(self, week: int, tref: gtime_t):
+        """ adjust week number considering reference time """
+        week_, _ = time2gpst(tref)
+        week_ref = (week_//1024)*1024
+        return (week % 1024) + week_ref
+
     def sys2str(self, sys: uGNSS):
         """ convert system enum to string """
         gnss_t = {uGNSS.GPS: "GPS", uGNSS.GLO: "GLO", uGNSS.GAL: "GAL",
@@ -546,6 +666,149 @@ class rtcm(cssr):
         if sys not in gnss_t:
             return ""
         return gnss_t[sys]
+
+
+class rtcm(cssr, rtcmUtil):
+    """ class to decode RTCM3 messages """
+
+    def __init__(self, foutname=None):
+        super().__init__(foutname)
+        self.len = 0
+        self.monlevel = 1
+        self.sysref = -1
+        self.nsig_max = 4
+        self.lock = {}
+        self.mask_pbias = False
+
+        self.pid = 0  # SSR Provider ID
+        self.sid = 0  # SSR Solution Type
+        self.mi = False
+
+        self.nrtk_r = {}
+
+        self.glo_bias = None  # GLONASS receiver bias
+        self.pos_arp = None  # receiver position
+        self.ant_desc = "unknown"
+        self.ant_id = ""
+        self.ant_serial = ""
+        self.rcv_type = ""
+        self.firm_ver = "unknown"
+        self.rcv_serial = ""
+
+        self.antc = {}
+        self.integ = Integrity()
+        self.test_mode = False  # for interop testing in SC134
+
+    def ssig2rsig(self, sys: uGNSS, utyp: uTYP, ssig):
+        """ convert ssig to rSigRnx """
+        gps_tbl = {
+            0: uSIG.L1C,
+            1: uSIG.L1P,
+            2: uSIG.L1W,
+            5: uSIG.L2C,
+            6: uSIG.L2D,
+            7: uSIG.L2S,
+            8: uSIG.L2L,
+            9: uSIG.L2X,
+            10: uSIG.L2P,
+            11: uSIG.L2W,
+            14: uSIG.L5I,
+            15: uSIG.L5Q,
+            16: uSIG.L5X,
+            17: uSIG.L1S,
+            18: uSIG.L1L,
+            19: uSIG.L1X,
+        }
+        glo_tbl = {
+            0: uSIG.L1C,
+            1: uSIG.L1P,
+            2: uSIG.L2C,
+            3: uSIG.L2P,
+            4: uSIG.L4A,
+            5: uSIG.L4B,
+            6: uSIG.L6A,
+            7: uSIG.L6B,
+            10: uSIG.L3I,
+            11: uSIG.L3Q,
+        }
+
+        gal_tbl = {
+            0: uSIG.L1A,
+            1: uSIG.L1B,
+            2: uSIG.L1C,
+            3: uSIG.L1X,
+            4: uSIG.L1Z,
+            5: uSIG.L5I,
+            6: uSIG.L5Q,
+            7: uSIG.L5X,
+            8: uSIG.L7I,
+            9: uSIG.L7Q,
+            10: uSIG.L7X,
+            11: uSIG.L8I,
+            12: uSIG.L8Q,
+            13: uSIG.L8X,
+            14: uSIG.L6A,
+            15: uSIG.L6B,
+            16: uSIG.L6C,
+            17: uSIG.L6X,
+            18: uSIG.L6Z,
+        }
+
+        bds_tbl = {
+            0: uSIG.L2I,
+            1: uSIG.L2Q,
+            2: uSIG.L2X,
+            3: uSIG.L6I,
+            4: uSIG.L6Q,
+            5: uSIG.L6X,
+            6: uSIG.L7I,
+            7: uSIG.L7Q,
+            8: uSIG.L7X,
+            9: uSIG.L1D,
+            10: uSIG.L1P,
+            11: uSIG.L1X,
+            12: uSIG.L5D,
+            13: uSIG.L5P,
+            14: uSIG.L5X,
+            15: uSIG.L1A,
+        }
+
+        qzs_tbl = {
+            0: uSIG.L1C,
+            1: uSIG.L1S,
+            2: uSIG.L1C,
+            3: uSIG.L2S,
+            4: uSIG.L2L,
+            5: uSIG.L2X,
+            6: uSIG.L5I,
+            7: uSIG.L5Q,
+            8: uSIG.L5X,
+            9: uSIG.L6S,
+            10: uSIG.L6L,
+            11: uSIG.L6X,
+            12: uSIG.L1X,
+            17: uSIG.L6E,
+            19: uSIG.L1E,  # TBD
+        }
+
+        sbs_tbl = {
+            0: uSIG.L1C,
+            1: uSIG.L5I,
+            2: uSIG.L5Q,
+            3: uSIG.L5X,
+        }
+
+        usig_tbl_ = {
+            uGNSS.GPS: gps_tbl,
+            uGNSS.GLO: glo_tbl,
+            uGNSS.GAL: gal_tbl,
+            uGNSS.BDS: bds_tbl,
+            uGNSS.QZS: qzs_tbl,
+            uGNSS.SBS: sbs_tbl,
+        }
+
+        usig_tbl = usig_tbl_[sys]
+        return rSigRnx(sys, utyp, usig_tbl[ssig])
 
     def sync(self, buff, k):
         """ check if the buffer has a sync pattern """
@@ -670,61 +933,6 @@ class rtcm(cssr):
         i += 22
         self.dclk_n[k] = self.sval(hclk, 22, 0.1e-3)
         return i
-
-    def get_ssr_sys(self, msgtype):
-        """ get system from ssr message type """
-        if msgtype == 4076:
-            return self.sysref
-        else:
-            if msgtype >= 1057 and msgtype < 1063:
-                return uGNSS.GPS
-            elif msgtype >= 1063 and msgtype < 1069:
-                return uGNSS.GLO
-            elif msgtype >= 1240 and msgtype < 1246:
-                return uGNSS.GAL
-            elif msgtype >= 1246 and msgtype < 1252:
-                return uGNSS.QZS
-            elif msgtype >= 1252 and msgtype < 1258:
-                return uGNSS.SBS
-            elif msgtype >= 1258 and msgtype < 1264:
-                return uGNSS.BDS
-            elif msgtype >= 1265 and msgtype < 1271:  # proposed phase bias
-                tbl_t = {1265: uGNSS.GPS, 1266: uGNSS.GLO, 1267: uGNSS.GAL,
-                         1268: uGNSS.QZS, 1269: uGNSS.SBS, 1270: uGNSS.BDS}
-                return tbl_t[msgtype]
-            # RTCM SSR test messages
-            elif msgtype >= 41 and msgtype < 47:  # OBC
-                return uGNSS.GLO
-            elif msgtype in [62, 65, 68, 71, 74, 77]:  # OBC
-                return uGNSS.GAL
-            elif msgtype in [63, 66, 69, 72, 75, 78]:  # OBC
-                return uGNSS.BDS
-            elif msgtype in [64, 67, 70, 73, 76, 79]:  # OBC
-                return uGNSS.QZS
-            elif msgtype >= 80 and msgtype < 85:  # proposed satellite antenna
-                tbl_t = {80: uGNSS.GPS, 81: uGNSS.GLO, 82: uGNSS.GAL,
-                         83: uGNSS.BDS, 84: uGNSS.QZS}
-                return tbl_t[msgtype]
-            elif msgtype >= 85 and msgtype < 90:  # proposed phase bias
-                tbl_t = {85: uGNSS.GPS, 86: uGNSS.GLO, 87: uGNSS.GAL,
-                         88: uGNSS.BDS, 89: uGNSS.QZS}
-                return tbl_t[msgtype]
-            elif msgtype >= 90 and msgtype < 95:  # proposed phase bias
-                tbl_t = {90: uGNSS.GPS, 91: uGNSS.GLO, 92: uGNSS.GAL,
-                         93: uGNSS.BDS, 94: uGNSS.QZS}
-                return tbl_t[msgtype]
-            elif msgtype >= 96 and msgtype < 101:  # regional iono
-                tbl_t = {96: uGNSS.GPS, 97: uGNSS.GLO, 98: uGNSS.GAL,
-                         99: uGNSS.BDS, 100: uGNSS.QZS}
-            elif msgtype in [60, 61, 95]:  # METADATA, grid definition, trop
-                return uGNSS.NONE
-            elif msgtype in [11, 12, 13]:  # RTCM SC-134 test messages
-                return uGNSS.NONE
-            else:
-                print(f"definition of {msgtype} is missing")
-                # return uGNSS.NONE
-
-            return tbl_t[msgtype]
 
     def decode_cssr_orb(self, msg, i, inet=0):
         """ decode RTCM Orbit Correction message """
@@ -1102,19 +1310,6 @@ class rtcm(cssr):
 
         return i
 
-    def nrtktype(self, msgtype):
-        """ get system from nrtk message type """
-        gnss_t = {1030: uGNSS.GPS, 1031: uGNSS.GLO,
-                  1303: uGNSS.BDS, 1304: uGNSS.GAL, 1305: uGNSS.QZS}
-
-        sys = uGNSS.NONE
-        nrtk = 0
-        if msgtype in gnss_t.keys():
-            nrtk = 1
-            sys = gnss_t[msgtype]
-
-        return sys, nrtk
-
     def decode_nrtk_time(self, msg, i):
         """ decode Network RTK Time Message """
         sys, nrtk = self.nrtktype(self.msgtype)
@@ -1147,7 +1342,7 @@ class rtcm(cssr):
             s0c, s0d, s0h, sic, sid = bs.unpack_from('u8u9u6u10u10', msg, i)
             i += 43
             self.nrtk_r[sat] = np.array([s0c*5e-4, s0d*1e-8, s0h*1e-7,
-                                         sic*5e-4, sid*1e-8])
+                                        sic*5e-4, sid*1e-8])
 
         return i
 
@@ -1339,7 +1534,7 @@ class rtcm(cssr):
                 self.fh.write(" dpos: {:6.3f} {:6.3f} {:9.3f}\n".format(
                     self.dpos[k][0], self.dpos[k][1], self.dpos[k][2]))
 
-        if self.subtype in [sCSSR.CBIAS, sCSSR.BIAS]:
+        if self.subtype in [sCSSR.CBIAS, sCSSR.BIAS, sRTCM.SSR_CBIAS]:
             self.fh.write(f" IODSSR:{self.iodssr} ProvID:{self.pid} " +
                           f"SolID:{self.sid}\n")
             self.fh.write(" {:s}\t{:s}\t{:s}\t{:s}\n"
@@ -1365,7 +1560,7 @@ class rtcm(cssr):
 
             self.fh.write("\t{:s}\t{:s}\t{:s}\t{:s}\t{:s}\n"
                           .format("SigID", "PBias[m]", "i", "cnt", "..."))
-            for k, sat_ in enumerate(self.lc[0].pbias.keys()):
+            for k, sat_ in enumerate(self.lc[inet].pbias.keys()):
                 sys_, _ = sat2prn(sat_)
                 if sys_ != sys:
                     continue
@@ -1373,14 +1568,14 @@ class rtcm(cssr):
 
                 if self.iyaw:
                     self.fh.write("\t{:7.4f}\t{:7.4f}\t"
-                                  .format(self.lc[0].yaw[sat_],
-                                          self.lc[0].dyaw[sat_]))
+                                  .format(self.lc[inet].yaw[sat_],
+                                          self.lc[inet].dyaw[sat_]))
 
-                for sig in self.lc[0].pbias[sat_].keys():
+                for sig in self.lc[inet].pbias[sat_].keys():
                     self.fh.write("{:s}\t{:7.4f}\t{:1d}\t{:2d}\t"
-                                  .format(sig, self.lc[0].pbias[sat_][sig],
-                                          self.lc[0].si[sat_][sig],
-                                          self.lc[0].di[sat_][sig]))
+                                  .format(sig, self.lc[inet].pbias[sat_][sig],
+                                          self.lc[inet].si[sat_][sig],
+                                          self.lc[inet].di[sat_][sig]))
                 self.fh.write("\n")
 
         if self.subtype == sRTCM.ANT_DESC:
@@ -2285,13 +2480,13 @@ class rtcm(cssr):
         i += 7
         if mi:
             # non-default model/correction id DF+67
-            mci = bs.unpack_from('u3', msg, i)[0]
+            # mci = bs.unpack_from('u3', msg, i)[0]
             i += 3
         iodmi = bs.unpack_from('b1', msg, i)[0]  # DF+68
         i += 1
         if iodmi:
             # DF+69 model/correction data IOD
-            iodm = bs.unpack_from('u6', msg, i)[0]
+            # iodm = bs.unpack_from('u6', msg, i)[0]
             i += 6
         if mi:
             # DF+070 1:additional model parameter present
@@ -2303,7 +2498,7 @@ class rtcm(cssr):
             i += 8
         if mi and mpi:
             # aditional model parameter DF+072
-            data = bs.unpack_from('u'+str(nb), msg, i)[0]
+            # data = bs.unpack_from('u'+str(nb), msg, i)[0]
             i += nb
 
         if mt == 7:  # GNSS BE Reference
@@ -2402,9 +2597,15 @@ class rtcm(cssr):
         elif gtype == 1:  # grid type 1
             lat0, lon0, ofst, npnt = bs.unpack_from('s18s19u12u8', msg, i)
             i += 57
+
             lat = self.sval(lat0, 18, 1e-3)
             lon = self.sval(lon0, 19, 1e-3)
-            self.grid = np.array([], dtype=dtype0)
+
+            self.grid = np.array([(gid, ofst, lat, lon, 0)], dtype=dtype0)
+            self.dpos = np.zeros((npnt, 3))
+            self.pos0 = np.array([lat, lon, 0])
+            self.ofst = ofst
+
             for k in range(npnt):
                 dlat, dlon = bs.unpack_from('s13s14', msg, i)
                 i += 27
@@ -2412,6 +2613,7 @@ class rtcm(cssr):
                 lon += self.sval(dlon, 14, 1e-3)
                 d = np.array([(gid, k, lat, lon, 0)], dtype=dtype0)
                 self.grid = np.append(self.grid, d)
+                self.dpos[k-ofst, :] = (dlat*1e-3, dlon*1e-3, 0)
 
         elif gtype == 2:  # grid type 2
             lat0_, lon0_, nrow, ncol, dlat_, dlon_, gma = bs.unpack_from(
@@ -3496,7 +3698,7 @@ class rtcm(cssr):
         return i, obs, eph, geph, seph
 
 
-class rtcme(cssre):
+class rtcme(cssre, rtcmUtil):
     """ class for RTCM message encoder """
 
     def __init__(self):
@@ -3515,314 +3717,23 @@ class rtcme(cssre):
         self.si = 0  # smoothing indicator
         self.smi = 0  # smoothing interval
 
-        self.msm_t = {
-            uGNSS.GPS: 1071, uGNSS.GLO: 1081, uGNSS.GAL: 1091,
-            uGNSS.SBS: 1101, uGNSS.QZS: 1111, uGNSS.BDS: 1121
-        }
+        self.gtype = 0
+        self.ofst = 0
+        self.nm = 0  # number of metadata model
+        self.iyaw = False
+        self.iexpb = 0
+        self.nlen = 0  # Hydrostatic Grid Point Residual Length DF+050
+        self.mlen = 14  # Wet Grid Point Residual Length DF+051
 
-        self.ssr_t = {
-            uGNSS.GPS: 1057, uGNSS.GLO: 1063, uGNSS.GAL: 1240,
-            uGNSS.QZS: 1246, uGNSS.SBS: 1252, uGNSS.BDS: 1258
-        }
-
-        self.eph_t = {
-            uGNSS.GPS: 1019, uGNSS.GLO: 1020, uGNSS.BDS: 1042,
-            uGNSS.QZS: 1044, uGNSS.GAL: 1046
-        }
-
-        self.sc_t = {sCSSR.ORBIT: sCType.ORBIT, sCSSR.CLOCK: sCType.CLOCK,
-                     sCSSR.MASK: sCType.MASK, sCSSR.CBIAS: sCType.CBIAS,
-                     sCSSR.PBIAS: sCType.PBIAS, sCSSR.URA: sCType.URA,
-                     sCSSR.GRID: sCType.TROP, sCSSR.STEC: sCType.STEC,
-                     sRTCM.SSR_PBIAS: sCType.PBIAS,
-                     sRTCM.SSR_TROP: sCType.TROP,
-                     sRTCM.SSR_STEC: sCType.STEC,
-                     }
-
-    def get_ssr_sys(self, msgtype):
-        """ get system from ssr message type """
-        if msgtype == 4076:
-            return self.sysref
-        else:
-            if msgtype >= 1057 and msgtype < 1063:
-                return uGNSS.GPS
-            elif msgtype >= 1063 and msgtype < 1069:
-                return uGNSS.GLO
-            elif msgtype >= 1240 and msgtype < 1246:
-                return uGNSS.GAL
-            elif msgtype >= 1246 and msgtype < 1252:
-                return uGNSS.QZS
-            elif msgtype >= 1252 and msgtype < 1258:
-                return uGNSS.SBS
-            elif msgtype >= 1258 and msgtype < 1264:
-                return uGNSS.BDS
-            elif msgtype >= 1265 and msgtype < 1271:  # proposed phase bias
-                tbl_t = {1265: uGNSS.GPS, 1266: uGNSS.GLO, 1267: uGNSS.GAL,
-                         1268: uGNSS.QZS, 1269: uGNSS.SBS, 1270: uGNSS.BDS}
-                return tbl_t[msgtype]
-            # RTCM SSR test messages
-            elif msgtype >= 41 and msgtype < 47:  # OBC
-                return uGNSS.GLO
-            elif msgtype in [62, 65, 68, 71, 74, 77]:  # OBC
-                return uGNSS.GAL
-            elif msgtype in [63, 66, 69, 72, 75, 78]:  # OBC
-                return uGNSS.BDS
-            elif msgtype in [64, 67, 70, 73, 76, 79]:  # OBC
-                return uGNSS.QZS
-            elif msgtype >= 80 and msgtype < 85:  # proposed satellite antenna
-                tbl_t = {80: uGNSS.GPS, 81: uGNSS.GLO, 82: uGNSS.GAL,
-                         83: uGNSS.BDS, 84: uGNSS.QZS}
-                return tbl_t[msgtype]
-            elif msgtype >= 85 and msgtype < 90:  # proposed phase bias
-                tbl_t = {85: uGNSS.GPS, 86: uGNSS.GLO, 87: uGNSS.GAL,
-                         88: uGNSS.BDS, 89: uGNSS.QZS}
-                return tbl_t[msgtype]
-            elif msgtype >= 90 and msgtype < 95:  # proposed phase bias
-                tbl_t = {90: uGNSS.GPS, 91: uGNSS.GLO, 92: uGNSS.GAL,
-                         93: uGNSS.BDS, 94: uGNSS.QZS}
-                return tbl_t[msgtype]
-            elif msgtype >= 96 and msgtype < 101:  # regional iono
-                tbl_t = {96: uGNSS.GPS, 97: uGNSS.GLO, 98: uGNSS.GAL,
-                         99: uGNSS.BDS, 100: uGNSS.QZS}
-            elif msgtype in [60, 61, 95]:  # METADATA, grid definition, trop
-                return uGNSS.NONE
-            elif msgtype in [11, 12, 13]:  # RTCM SC-134 test messages
-                return uGNSS.NONE
-            else:
-                print(f"definition of {msgtype} is missing")
-                # return uGNSS.NONE
-
-            return tbl_t[msgtype]
-
-    def rsig2code(self, rsig):
-        """ convert rSigRnx to RTCM SSR code """
-        gps_tbl = {
-            0: uSIG.L1C,
-            1: uSIG.L1P,
-            2: uSIG.L1W,
-            5: uSIG.L2C,
-            6: uSIG.L2D,
-            7: uSIG.L2S,
-            8: uSIG.L2L,
-            9: uSIG.L2X,
-            10: uSIG.L2P,
-            11: uSIG.L2W,
-            14: uSIG.L5I,
-            15: uSIG.L5Q,
-            16: uSIG.L5X,
-            17: uSIG.L1S,
-            18: uSIG.L1L,
-            19: uSIG.L1X,
-        }
-        glo_tbl = {
-            0: uSIG.L1C,
-            1: uSIG.L1P,
-            2: uSIG.L2C,
-            3: uSIG.L2P,
-            4: uSIG.L4A,
-            5: uSIG.L4B,
-            6: uSIG.L6A,
-            7: uSIG.L6B,
-            10: uSIG.L3I,
-            11: uSIG.L3Q,
-        }
-
-        gal_tbl = {
-            0: uSIG.L1A,
-            1: uSIG.L1B,
-            2: uSIG.L1C,
-            3: uSIG.L1X,
-            4: uSIG.L1Z,
-            5: uSIG.L5I,
-            6: uSIG.L5Q,
-            7: uSIG.L5X,
-            8: uSIG.L7I,
-            9: uSIG.L7Q,
-            10: uSIG.L7X,
-            11: uSIG.L8I,
-            12: uSIG.L8Q,
-            13: uSIG.L8X,
-            14: uSIG.L6A,
-            15: uSIG.L6B,
-            16: uSIG.L6C,
-            17: uSIG.L6X,
-            18: uSIG.L6Z,
-        }
-
-        bds_tbl = {
-            0: uSIG.L2I,
-            1: uSIG.L2Q,
-            2: uSIG.L2X,
-            3: uSIG.L6I,
-            4: uSIG.L6Q,
-            5: uSIG.L6X,
-            6: uSIG.L7I,
-            7: uSIG.L7Q,
-            8: uSIG.L7X,
-            9: uSIG.L1D,
-            10: uSIG.L1P,
-            11: uSIG.L1X,
-            12: uSIG.L5D,
-            13: uSIG.L5P,
-            14: uSIG.L5X,
-            15: uSIG.L1A,
-        }
-
-        qzs_tbl = {
-            0: uSIG.L1C,
-            1: uSIG.L1S,
-            2: uSIG.L1C,
-            3: uSIG.L2S,
-            4: uSIG.L2L,
-            5: uSIG.L2X,
-            6: uSIG.L5I,
-            7: uSIG.L5Q,
-            8: uSIG.L5X,
-            9: uSIG.L6S,
-            10: uSIG.L6L,
-            11: uSIG.L6X,
-            12: uSIG.L1X,
-            17: uSIG.L6E,
-            19: uSIG.L1E,  # TBD
-        }
-
-        sbs_tbl = {
-            0: uSIG.L1C,
-            1: uSIG.L5I,
-            2: uSIG.L5Q,
-            3: uSIG.L5X,
-        }
-
-        usig_tbl_ = {
-            uGNSS.GPS: gps_tbl,
-            uGNSS.GLO: glo_tbl,
-            uGNSS.GAL: gal_tbl,
-            uGNSS.BDS: bds_tbl,
-            uGNSS.QZS: qzs_tbl,
-            uGNSS.SBS: sbs_tbl,
-        }
-
-        usig_tbl = usig_tbl_[rsig.sys]
-        dic = {usig_tbl[s]: s for s in usig_tbl}
-
-        return dic[rsig.sig]
-
-    def msm2rsig(self, sys: uGNSS, utyp: uTYP, ssig):
-        """ convert ssig to rSigRnx for MSM """
-        gps_tbl = {
-            2: uSIG.L1C,
-            3: uSIG.L1P,
-            4: uSIG.L1W,
-            8: uSIG.L2C,
-            9: uSIG.L2P,
-            10: uSIG.L2W,
-            15: uSIG.L2S,
-            16: uSIG.L2L,
-            17: uSIG.L2X,
-            22: uSIG.L5I,
-            23: uSIG.L5Q,
-            24: uSIG.L5X,
-            30: uSIG.L1S,
-            31: uSIG.L1L,
-            32: uSIG.L1X,
-        }
-        glo_tbl = {
-            2: uSIG.L1C,
-            3: uSIG.L1P,
-            8: uSIG.L2C,
-            9: uSIG.L2P,
-            10: uSIG.L4A,
-            11: uSIG.L4B,
-            12: uSIG.L4X,
-            13: uSIG.L6A,
-            14: uSIG.L6X,
-            15: uSIG.L3I,
-            16: uSIG.L3Q,
-            17: uSIG.L3X,
-        }
-
-        gal_tbl = {
-            2: uSIG.L1C,
-            3: uSIG.L1A,
-            4: uSIG.L1B,
-            5: uSIG.L1X,
-            6: uSIG.L1Z,
-            8: uSIG.L6C,
-            9: uSIG.L6A,
-            10: uSIG.L6B,
-            11: uSIG.L6X,
-            12: uSIG.L6Z,
-            14: uSIG.L7I,
-            15: uSIG.L7Q,
-            16: uSIG.L7X,
-            18: uSIG.L8I,
-            19: uSIG.L8Q,
-            20: uSIG.L8X,
-            22: uSIG.L5I,
-            23: uSIG.L5Q,
-            24: uSIG.L5X,
-        }
-
-        bds_tbl = {
-            2: uSIG.L2I,
-            3: uSIG.L2Q,
-            4: uSIG.L2X,
-            8: uSIG.L6I,
-            9: uSIG.L6Q,
-            10: uSIG.L6X,
-            14: uSIG.L7I,
-            15: uSIG.L7Q,
-            16: uSIG.L7X,
-            22: uSIG.L5D,
-            23: uSIG.L5P,
-            24: uSIG.L5X,
-            25: uSIG.L7D,
-            30: uSIG.L1D,
-            31: uSIG.L1P,
-            32: uSIG.L1X,
-        }
-
-        qzs_tbl = {
-            2: uSIG.L1C,
-            3: uSIG.L1E,
-            9: uSIG.L6S,
-            10: uSIG.L6L,
-            11: uSIG.L6X,
-            15: uSIG.L2S,
-            16: uSIG.L2L,
-            17: uSIG.L2X,
-            22: uSIG.L5I,
-            23: uSIG.L5Q,
-            24: uSIG.L5X,
-            30: uSIG.L1S,
-            31: uSIG.L1L,
-            32: uSIG.L1X,
-        }
-
-        sbs_tbl = {
-            2: uSIG.L1C,
-            22: uSIG.L5I,
-            23: uSIG.L5Q,
-            24: uSIG.L5X,
-        }
-
-        irn_tbl = {
-            8: uSIG.L9A,
-            22: uSIG.L5A,
-        }
-
-        usig_tbl_ = {
-            uGNSS.GPS: gps_tbl,
-            uGNSS.GLO: glo_tbl,
-            uGNSS.GAL: gal_tbl,
-            uGNSS.BDS: bds_tbl,
-            uGNSS.QZS: qzs_tbl,
-            uGNSS.SBS: sbs_tbl,
-            uGNSS.IRN: irn_tbl,
-        }
-
-        usig_tbl = usig_tbl_[sys]
-        return rSigRnx(sys, utyp, usig_tbl[ssig])
+        # RTCM SSR grid parameters
+        self.ncol = 0
+        self.nrow = 0
+        self.dlat = 0
+        self.dlon = 0
+        self.gma = False
+        self.latmask = 0
+        self.lonmask = 0
+        self.egpmask = 0
 
     def set_sync(self, msg, k):
         msg[k] = 0xd3
@@ -3849,32 +3760,14 @@ class rtcme(cssre):
     def round_i(self, v):
         return int(v+0.5)
 
-    def is_msmtype(self, msgtype):
-        """ check if the message type is MSM """
-        for sys_ in self.msm_t.keys():
-            if msgtype >= self.msm_t[sys_] and msgtype <= self.msm_t[sys_]+6:
-                return True
-        return False
+    def ival(self, y, nbit, scl):
+        """ float to int conversion with scaling """
+        if np.isnan(y):
+            u = -(1 << (nbit-1))  # -lim: data is not available
+        else:
+            u = round(y/scl)
 
-    def msmtype(self, msgtype):
-        """ get system and msm type from message type """
-        sys = uGNSS.NONE
-        msm = 0
-        for sys_ in self.msm_t.keys():
-            if msgtype >= self.msm_t[sys_] and msgtype <= self.msm_t[sys_]+6:
-                sys = sys_
-                msm = msgtype-self.msm_t[sys_]+1
-                break
-        return sys, msm
-
-    def sat2svid(self, sat):
-        """ convert sat number to svid """
-        sys, svid = sat2prn(sat)
-        if sys == uGNSS.QZS:
-            svid -= uGNSS.MINPRNQZS-1
-        elif sys == uGNSS.SBS:
-            svid -= uGNSS.MINPRNSBS-1
-        return svid
+        return u
 
     def encode_msm_time(self, sys, time):
         """ decode msm time """
@@ -3948,7 +3841,7 @@ class rtcme(cssre):
         for i in range(nobs):
             for j in range(nsig):
                 k = 0  # TBD
-                freq = obs.sig.frequency()
+                # freq = obs.sig.frequency()
                 r[k] = self.round_i(
                     obs.P[i, j]/(rms*rCST.P2_10))*rms*rCST.P2_10
 
@@ -4096,11 +3989,10 @@ class rtcme(cssre):
         i += 30
 
         self.inet = self.gid
+        grid = self.grid[self.grid['nid'] == self.inet]
+        self.ng = grid.shape[0]
 
         if self.gtype == 0:  # grid type 0
-            grid = self.grid[self.grid['nid'] == self.gid]
-            self.ng = grid.shape[0]
-
             gid, ofst, lat, lon, alt = grid[0]
 
             lat_i = int(lat/1e-3)
@@ -4132,27 +4024,51 @@ class rtcme(cssre):
                 i += 36
 
         elif self.gtype == 1:  # grid type 1
-            grid = self.grid(self.grid['nid'] == self.inet)
-
             gid, ofst, lat, lon, alt = grid[0]
 
-            lat_ = int(lat/1e-3)
-            lon_ = int(lon/1e-3)
+            lat_i = int(lat/1e-3)
+            lon_i = int(lon/1e-3)
 
-            bs.pack_into('s18s19u12u8', msg, i, lat_, lon_, self.ofst, self.ng)
+            bs.pack_into('s18s19u12u8', msg, i, lat_i, lon_i,
+                         self.ofst, self.ng)
             i += 57
 
-            for k in range(self.ng):
-                gid, ofst, lat, lon, _ = grid[k]
-                dlat_ = lat-lat_
-                dlon_ = lon-lon_
-                lat_ = lat
-                lon_ = lon
+            for k in range(self.ng-1):
+                gid, ofst, lat_, lon_, _ = grid[k]
+                dlat = lat_-lat
+                dlon = lon_-lon
+                lat = lat_
+                lon = lon_
 
-                dlat = int(dlat_/1e-3)
-                dlon = int(dlon_/1e-3)
-                bs.pack_into('s13s14', msg, i, dlat, dlon)
+                dlat_i = int(dlat/1e-3)
+                dlon_i = int(dlon/1e-3)
+                bs.pack_into('s13s14', msg, i, dlat_i, dlon_i)
                 i += 27
+
+        elif self.gtype == 2:  # grid type 2
+            gid, ofst, lat0, lon0, alt = grid[0]
+
+            lat_i = int(lat0/1e-3)
+            lon_i = int(lon0/1e-3)
+            dlat_i = int(self.dlat/0.01)
+            dlon_i = int(self.dlon/0.01)
+
+            bs.pack_into('s18s19u6u6u9u10b1', msg, i, lat_i, lon_i,
+                         self.nrow, self.ncol, dlat_i,  dlon_i, self.gma)
+            i += 69
+
+            if self.gma:
+                bs.pack_into('u'+str(self.nrow), msg, i, self.latmask)
+                i += self.nrow
+                bs.pack_into('u'+str(self.ncol), msg, i, self.lonmask)
+                i += self.ncol
+
+                ilat, nlat = self.decode_mask(self.latmask, self.nrow, 0)
+                ilon, nlon = self.decode_mask(self.lonmask, self.ncol, 0)
+                n = nlat*nlon
+                bs.pack_into('u'+str(n), msg, i, self.egpmask)
+                i += n
+                # iex, nex = self.decode_mask(egpmask, n, 0)
 
         return i
 
@@ -4237,17 +4153,17 @@ class rtcme(cssre):
         bs.pack_into('u'+str(blen), msg, i, self.lc[inet].iode[sat])
         i += blen
 
-        dx = int(self.lc[inet].dorb[sat][0]/0.1e-3)
-        dy = int(self.lc[inet].dorb[sat][1]/0.4e-3)
-        dz = int(self.lc[inet].dorb[sat][2]/0.4e-3)
+        dx = self.ival(self.lc[inet].dorb[sat][0], 22, 0.1e-3)
+        dy = self.ival(self.lc[inet].dorb[sat][1], 20, 0.4e-3)
+        dz = self.ival(self.lc[inet].dorb[sat][2], 20, 0.4e-3)
 
         bs.pack_into('s22s20s20', msg, i, dx, dy, dz)
         i += 62
 
         if self.lc[inet].ddorb is not None:
-            ddx = int(self.lc[inet].ddorb[sat][0]/1e-6)
-            ddy = int(self.lc[inet].ddorb[sat][1]/4e-6)
-            ddz = int(self.lc[inet].ddorb[sat][2]/4e-6)
+            ddx = self.ival(self.lc[inet].ddorb[sat][0], 21, 1e-6)
+            ddy = self.ival(self.lc[inet].ddorb[sat][1], 19, 4e-6)
+            ddz = self.ival(self.lc[inet].ddorb[sat][2], 19, 4e-6)
         else:
             ddx, ddy, ddz = 0, 0, 0
 
@@ -4259,10 +4175,11 @@ class rtcme(cssre):
     def encode_clk_sat(self, msg, i, sat, inet=0):
         """ encoder clock correction of cssr """
 
-        dclk = int(self.lc[inet].dclk[sat]/0.1e-3)
+        dclk = self.ival(self.lc[inet].dclk[sat], 22, 0.1e-3)
+
         if self.lc[inet].ddclk is not None:
-            ddclk = int(self.lc[inet].ddclk[sat]/0.4e-3)
-            dddclk = int(self.lc[inet].dddclk[sat]/4e-6)
+            ddclk = self.ival(self.lc[inet].ddclk[sat], 21, 0.4e-3)
+            dddclk = self.ival(self.lc[inet].dddclk[sat], 27, 4e-6)
         else:
             ddclk, dddclk = 0, 0
 
@@ -4273,7 +4190,7 @@ class rtcme(cssre):
     def encode_hclk_sat(self, msg, i, sat, inet=0):
         """ encoder high-rate clock correction of cssr """
         if self.lc[inet].hclk is not None:
-            hclk = int(self.lc[inet].hclk[sat]/0.1e-3)
+            hclk = self.ival(self.lc[inet].hclk[sat], 22, 0.1e-3)
         else:
             hclk = 0
 
@@ -4320,7 +4237,10 @@ class rtcme(cssre):
             if sys_ != sys:
                 continue
             i = self.encode_sat(msg, i, sat)
-            cls_, val_ = self.quality2qi(ura[sat])
+            if np.isnan(ura[sat]):
+                cls_, val_ = 0, 0
+            else:
+                cls_, val_ = self.quality2qi(ura[sat])
             bs.pack_into('u3u3', msg, i, cls_, val_)
             i += 6
 
@@ -4382,7 +4302,7 @@ class rtcme(cssre):
 
             for rsig_ in pbias:
 
-                pb = int(pbias[rsig_]/1e-4)
+                pb = self.ival(pbias[rsig_], 20, 1e-4)
                 code = self.rsig2code(rsig_)
                 if sat in self.lc[inet].si:
                     si = self.lc[inet].si[sat][rsig_]
@@ -4417,12 +4337,12 @@ class rtcme(cssre):
         ah, bh, ch = self.lc[inet].maph
         aw, bw, cw = self.lc[inet].mapw
 
-        dah = int((ah-0.00118)/2.5e-7)
-        dbh = int((bh-0.00298)/5e-6)
-        dch = int((ch-0.0682)/2e-4)
-        daw = int((aw-0.000104)/1e-6)
-        dbw = int((bw-0.0015)/2.5e-5)
-        dcw = int((cw-0.048)/2e-3)
+        dah = self.ival((ah-0.00118), 11, 2.5e-7)
+        dbh = self.ival((bh-0.00298), 9, 5e-6)
+        dch = self.ival((ch-0.0682), 9, 2e-4)
+        daw = self.ival((aw-0.000104), 13, 1e-6)
+        dbw = self.ival((bw-0.0015), 6, 2.5e-5)
+        dcw = self.ival((cw-0.048), 5, 2e-3)
 
         # atmospheric model part
         bs.pack_into(
@@ -4433,13 +4353,13 @@ class rtcme(cssre):
         ct = self.lc[inet].ct
 
         # hydrostatic
-        ct00h = int((ct[0, 0]-2.3)/0.1e-3)
-        ct01h = int(ct[0, 1]/0.01e-3)
-        ct10h = int(ct[0, 2]/0.01e-3)
+        ct00h = self.ival((ct[0, 0]-2.3), 13, 0.1e-3)
+        ct01h = self.ival(ct[0, 1], 15, 0.01e-3)
+        ct10h = self.ival(ct[0, 2], 15, 0.01e-3)
         # wet
-        ct00w = int((ct[1, 0]-0.252)/0.1e-3)
-        ct01w = int(ct[1, 1]/0.01e-3)
-        ct10w = int(ct[1, 2]/0.01e-3)
+        ct00w = self.ival((ct[1, 0]-0.252), 13, 0.1e-3)
+        ct01w = self.ival(ct[1, 1], 15, 0.01e-3)
+        ct10w = self.ival(ct[1, 2], 15, 0.01e-3)
 
         bs.pack_into('s13s15s15', msg, i, ct00h, ct10h, ct01h)
         i += 43
@@ -4463,11 +4383,11 @@ class rtcme(cssre):
 
             for k in range(ofst, ofst+ng):
                 if n > 0:
-                    rh_ = int(rh[k]/0.1e-3)
+                    rh_ = self.ival(rh[k], n, 0.1e-3)
                     bs.pack_into(f's{n}', msg, i, rh_)
                     i += n
                 if m > 0:
-                    rw_ = int(rw[k]/0.1e-3)
+                    rw_ = self.ival(rw[k], m, 0.1e-3)
                     bs.pack_into(f's{m}', msg, i, rw_)
                     i += m
 
@@ -4516,12 +4436,12 @@ class rtcme(cssre):
             for sat_ in sat:
                 ci = self.lc[inet].ci[sat_]
 
-                c00i = int(ci[0]/0.01)
+                c00i = self.ival(ci[0], 17, 0.01)
                 bs.pack_into('s17', msg, i, c00i)
                 i += 17
                 if pgi:
-                    c01i = int(ci[1]/1e-3)
-                    c10i = int(ci[2]/1e-3)
+                    c01i = self.ival(ci[1], 18, 1e-3)
+                    c10i = self.ival(ci[2], 18, 1e-3)
                     bs.pack_into('s18s18', msg, i, c01i, c10i)
                     i += 36
 

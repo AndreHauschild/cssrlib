@@ -75,7 +75,12 @@ class sCType(IntEnum):
     AUTH = 8
     HCLOCK = 9
     VTEC = 10
-    MAX = 11
+    OC = 11  # orbit and clock
+    PBIAS_EX = 12
+    SATANT = 13
+    META = 14
+    GRID = 15
+    MAX = 16
 
 
 class sSigGPS(IntEnum):
