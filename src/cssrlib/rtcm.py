@@ -160,6 +160,7 @@ class Integrity():
     mod_t = ['BPSK(1)', 'BPSK(5)', 'BPSK(10)', 'BOC(1,1)', 'CBOC(6,1,1/11)',
              'AltBOC(15,10)', '', '']
 
+    atype_t = {0:"Circle", 1:"Polygon"}
     #
     mm_model_t = ['GMM', 'Mats Brenner', 'Jahn']
     
@@ -179,6 +180,17 @@ class Integrity():
     # Validity Period DFi065
     vp_tbl = [1, 2, 5, 10, 15, 30, 60, 120, 240,
               300, 600, 900, 1800, 3600, 7200, 10800]
+
+    mt_integ_t = {2000: "Minimum Integrity", 
+                  2005: "Extended Integrity (Service Levels and Overbounding)", 
+                  2006: "Extended Integrity (SIS and Local Error)", 
+                  2007: "Primary Service Area",
+                  2008: "Extended Service Area",
+                  2011: "SIS SSR Integrity",
+                  2051: "Quality Indicator",
+                  2091: "AGC SIS Monitoring",
+                  2071: "Satellite Visibility Map",
+                  2072: "Multipath Map"}
 
     def __init__(self):
         self.sys_r_tbl = {self.sys_tbl[s]: s for s in self.sys_tbl.keys()}
@@ -205,6 +217,8 @@ class Integrity():
         self.iod_freq = {}  # issue of GNSS signal mask DFi012 (b2)
         self.ists = {}  # signal integrity status DFi031 (b32)
         self.msts = {}  # signal monitoring status DFi032 (b32)
+
+        self.pos_v = None # service area (polygon/circle)
 
         self.Paug = 0  # Augmentation System Probability Falut DFi049
 
@@ -266,6 +280,16 @@ class Integrity():
         if idx>0:
             agc = idx-128
         return agc
+    
+    def decode_sol_t(self, mask):
+        """ decode Service Provider Solution Type"""
+        sol_t = ['ARAIM','SBAS','GBAS','DGNSS','RTK','NRTK/VRS','PPP','PPP-AR',
+                 'PPP-RTK','','','','','','','other']
+        s = ""
+        for k in range(15):
+            if (mask>>(15-k-1)) & 1:
+                s += sol_t[k]
+        return s
 
 class rtcmUtil:
     """ class to define common parameters and utilities for RTCM """
@@ -284,9 +308,6 @@ class rtcmUtil:
         uGNSS.GPS: 1019, uGNSS.GLO: 1020, uGNSS.BDS: 1042,
         uGNSS.QZS: 1044, uGNSS.GAL: 1046
     }
-
-    mt_integ_t = [2000, 2005, 2006, 2007,
-                  2008, 2011, 2051, 2071, 2072, 2091]
 
     sc_t = {sCSSR.ORBIT: sCType.ORBIT, sCSSR.CLOCK: sCType.CLOCK,
             sCSSR.MASK: sCType.MASK, sCSSR.CBIAS: sCType.CBIAS,
@@ -1512,8 +1533,7 @@ class rtcm(cssr, rtcmUtil):
         if sys > 0 and self.subtype not in [sRTCM.SSR_META, sRTCM.SSR_GRID]:
             j = self.sc_t[self.subtype]
             self.fh.write(f" Update Interval: {self.udint_t[self.udi[j]]}[s]")
-
-        self.fh.write(f" MultiMsg: {self.mi}\n")
+            self.fh.write(f" MultiMsg: {self.mi}\n")
 
         if self.subtype == sCSSR.CLOCK:
             self.out_log_ssr_clk(sys)
@@ -1755,10 +1775,11 @@ class rtcm(cssr, rtcmUtil):
                 self.fh.write("\n")
             self.fh.flush()
 
-        if self.msgtype == 54 or self.msgtype in self.mt_integ_t:  # RTCM SC134 integrity messages
-            # self.fh.write(f" Multiple Message Sequence :{self.integ.seq:}\n")
-            self.fh.write(" Message Type: {:4d}-{:-2d}\n".
-                          format(self.msgtype, self.subtype))
+        if self.msgtype == 54 or self.msgtype in self.integ.mt_integ_t:  # RTCM SC134 integrity messages
+            if self.msgtype == 54:
+                self.fh.write(f" Message Type: {self.msgtype}\n")
+            else:
+                self.fh.write(f" Message Type: {self.integ.mt_integ_t[self.msgtype]} ({self.msgtype})\n")
 
             if self.subtype == sRTCM.INTEG_MIN: # MT2000
                 self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
@@ -1829,7 +1850,7 @@ class rtcm(cssr, rtcmUtil):
                 self.fh.write(f" Area ID: {self.integ.aid}\n")
                 self.fh.write(f" Integrity Level: {self.integ.ilvl}\n")
                 self.fh.write(f" TTT: {self.integ.ttt}\n")
-                self.fh.write(f" Solution Type: {self.integ.stype}\n")
+                self.fh.write(f" Solution Type: {self.integ.decode_sol_t(self.integ.stype)}\n")
 
                 self.fh.write(f" Validity Period [s]: {self.integ.vp_tbl[self.integ.vp]}\n")
                 self.fh.write(f" Update rate interval [s]: {self.integ.uri*0.1}\n")
@@ -1838,70 +1859,70 @@ class rtcm(cssr, rtcmUtil):
                 self.fh.write(f" IOD param: {self.integ.iod_p}\n")
                 self.fh.write(f" Integrity/Continuity Flag: {self.integ.fc}\n")
 
-                self.fh.write(" mfd single: ")
+                self.fh.write(" Mean Failure Duration (MFD) of a Single Satellite Fault: ")
                 for sys, s in self.integ.mfd_s.items():
                     self.fh.write(f"  {sys2char(sys)}: {self.integ.mfd_s_t[s]}")
                 self.fh.write("\n")   
-                self.fh.write(" mfd constellation: ")
+                self.fh.write(" Mean Failure Duration (MFD) of a Constellation Fault: ")
                 for sys, s in self.integ.mfd_c.items():
                     self.fh.write(f"  {sys2char(sys)}: {self.integ.mfd_c_t[s]}")
                 self.fh.write("\n")                 
-                self.fh.write(" tau_c: ")
+                self.fh.write(" Correlation Time of Pseudorange Augmentation Message Error: ")
                 for sys, s in self.integ.tau_c.items():
                     self.fh.write(f"  {sys2char(sys)}: {self.integ.tau_c_t[s]}")
                 self.fh.write("\n") 
-                self.fh.write(" sig_c: ")
+                self.fh.write(" Pseudorange stdev: ")
                 for sys, s in self.integ.sig_c.items():
                     self.fh.write(f"  {sys2char(sys)}: {self.integ.sig_ob_c_t[s]}")
                 self.fh.write("\n") 
-                self.fh.write(" tau_p: ")
+                self.fh.write(" Correlation Time of Carrier Phase Augmentation Message Error: ")
                 for sys, s in self.integ.tau_p.items():
                     self.fh.write(f"  {sys2char(sys)}: {self.integ.tau_p_t[s]}")
                 self.fh.write("\n") 
-                self.fh.write(" sig_p: ")
+                self.fh.write(" Carrier Phase stdev: ")
                 for sys, s in self.integ.sig_p.items():
                     self.fh.write(f"  {sys2char(sys)}: {self.integ.sig_ob_p_t[s]}")
                 self.fh.write("\n") 
-                self.fh.write(" Pa_cc: ")
+                self.fh.write(" Multiple PR Augmentation Message Fault Probability: ")
                 for sys, s in self.integ.Pa_cc.items():
                     self.fh.write(f"  {sys2char(sys)}: {self.integ.P_t[s]}") 
                 self.fh.write("\n") 
-                self.fh.write(" Pa_cp: ")
+                self.fh.write(" Multiple CP Augmentation Message Fault Probability: ")
                 for sys, s in self.integ.Pa_cp.items():
                     self.fh.write(f"  {sys2char(sys)}: {self.integ.P_t[s]}")
                 self.fh.write("\n") 
 
-                self.fh.write(" Pa_sc:\n")
+                self.fh.write(" Single PR Augmentation Message Fault Probability:\n")
                 for sys, s in self.integ.Pa_sc.items():
                     self.fh.write(f"  {sys2char(sys)}:") 
                     for sat, v in s.items():
                         self.fh.write(f"  {sat2id(sat)} {self.integ.P_t[v]}")
                     self.fh.write("\n")
-                self.fh.write(" Pa_sp:\n")
-                for sys, s in self.integ.Pa_sp.items():
-                    self.fh.write(f"  {sys2char(sys)}:") 
-                    for sat, v in s.items():
-                        self.fh.write(f"  {sat2id(sat)} {self.integ.P_t[v]}")
-                    self.fh.write("\n")
-                self.fh.write(" sig_ob_c:\n")
+                self.fh.write(" Overbounding stdev of PR Augmentation Message Error under Fault-Free Scenario:\n")
                 for sys, s in self.integ.sig_ob_c.items():
                     self.fh.write(f"  {sys2char(sys)}:")  
                     for sat, v in s.items():
                         self.fh.write(f"  {sat2id(sat)} {self.integ.sig_ob_c_t[v]}")
                     self.fh.write("\n")
-                self.fh.write(" sig_ob_p:\n")
-                for sys, s in self.integ.sig_ob_p.items():
-                    self.fh.write(f"  {sys2char(sys)}:")  
+                self.fh.write(" Single CP Augmentation Message Fault Probability:\n")
+                for sys, s in self.integ.Pa_sp.items():
+                    self.fh.write(f"  {sys2char(sys)}:") 
                     for sat, v in s.items():
-                        self.fh.write(f"  {sat2id(sat)} {self.integ.sig_ob_p_t[v]}")
-                    self.fh.write("\n")           
-                self.fh.write(" b_ob_c:\n")
+                        self.fh.write(f"  {sat2id(sat)} {self.integ.P_t[v]}")
+                    self.fh.write("\n")
+                self.fh.write(" Overbounding Bias of the Long-Term PR Augmentation Message Bias Error under Fault-Free Scenario:\n")
                 for sys, s in self.integ.b_ob_c.items():
                     self.fh.write(f"  {sys2char(sys)}:") 
                     for sat, v in s.items():
                         self.fh.write(f"  {sat2id(sat)} {self.integ.b_ob_c_t[v]}")
                     self.fh.write("\n") 
-                self.fh.write(" b_ob_p:\n")
+                self.fh.write(" Overbounding stdev of CP Augmentation Message Error under Fault-Free Scenario:\n")
+                for sys, s in self.integ.sig_ob_p.items():
+                    self.fh.write(f"  {sys2char(sys)}:")  
+                    for sat, v in s.items():
+                        self.fh.write(f"  {sat2id(sat)} {self.integ.sig_ob_p_t[v]}")
+                    self.fh.write("\n")           
+                self.fh.write(" Overbounding Bias of the Long-Term CP Augmentation Message Bias Error under Fault-Free Scenario:\n")
                 for sys, s in self.integ.b_ob_p.items():
                     self.fh.write(f"  {sys2char(sys)}:") 
                     for sat, v in s.items():
@@ -1910,87 +1931,86 @@ class rtcm(cssr, rtcmUtil):
 
             elif self.subtype == sRTCM.INTEG_EXT_SIS:  # MT2006
                 self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
-                self.fh.write(f" Provider Id: {self.integ.pid}\n")
-                self.fh.write(f" Area-ID: {self.integ.aid}\n")
                 self.fh.write(f" IOD param: {self.integ.iod_ip}\n")
-
+                self.fh.write(f" Provider Id: {self.integ.pid}\n")
+                self.fh.write(f" Service Area ID: {self.integ.aid}\n")
                 self.fh.write(f" Validity Period [s]: {self.integ.vp_tbl[self.integ.vp]}\n")
                 self.fh.write(f" Update rate interval [s]: {self.integ.uri*0.1}\n")
-                self.fh.write(f" Integrity/Continuity Flag: {self.integ.fc}\n")
+                self.fh.write(f" Time Correlation Integrity/Continuity Flag: {self.integ.fc}\n")
                 
                 b = self.integ.bias
-                self.fh.write(f" bias (inter-const): {self.integ.b_intc_t[b[0]]}\n")
-                self.fh.write(f" bias (inter-freq): {self.integ.b_intf_t[b[1]]}\n")
+                self.fh.write(f" Bounding inter-constellation bia: {self.integ.b_intc_t[b[0]]}\n")
+                self.fh.write(f" Bounding inter-frequency bias: {self.integ.b_intf_t[b[1]]}\n")
 
-                self.fh.write(" iod-mask:\n")
+                self.fh.write(" Issue of GNSS Satellite Mask:\n")
                 for sys, s in self.integ.iod_m.items():
                     self.fh.write(f"  {sys2char(sys)}: {s}")                 
                 self.fh.write("\n") 
                 
-                self.fh.write(" sig_cd:\n")
+                self.fh.write(" Bound on rate of change of PR error stdev:\n")
                 for sys, s in self.integ.sig_cd.items():
                     self.fh.write(f"  {sys2char(sys)}:") 
                     for sat, v in s.items():
                         self.fh.write(f"  {sat2id(sat)} {self.integ.sig_cd_t[v]}")
                     self.fh.write("\n") 
 
-                self.fh.write(" sig_pd:\n")
+                self.fh.write(" Bound on rate of change in phase error stdev:\n")
                 for sys, s in self.integ.sig_pd.items():
                     self.fh.write(f"  {sys2char(sys)}:") 
                     for sat, v in s.items():
                         self.fh.write(f"  {sat2id(sat)} {self.integ.sig_pd_t[v]}")
                     self.fh.write("\n")                 
 
-                self.fh.write(" cbr:\n")
+                self.fh.write(" Nominal pseudorange bias rate of change:\n")
                 for sys, s in self.integ.cbr.items():
                     self.fh.write(f"  {sys2char(sys)}:")   
                     for sat, v in s.items():
                         self.fh.write(f"  {sat2id(sat)} {self.integ.b_rsdsa_t[v]}")
                     self.fh.write("\n") 
                 
-                self.fh.write(" sig_dp:\n")
+                self.fh.write(" Bounding sigma on phase-range-rate error:\n")
                 for sys, s in self.integ.sig_dp.items():
                     self.fh.write(f"  {sys2char(sys)}:")       
                     for sat, v in s.items():
                         self.fh.write(f"  {sat2id(sat)} {self.integ.sig_b_pd_t[v]}")
                     self.fh.write("\n") 
 
-                self.fh.write(" idx_dp:\n")
+                self.fh.write(" Phase-range-rate error rate integrity index:\n")
                 for sys, s in self.integ.idx_dp.items():
                     self.fh.write(f"  {sys2char(sys)}:")   
                     for sat, v in s.items():
                         self.fh.write(f"  {sat2id(sat)} {self.integ.b_pd_t[v]}")
                     self.fh.write("\n") 
 
-                self.fh.write(" orbit/clock:\n")
+                self.fh.write(" Orbit/clock error rate integrity:\n")
                 for sys, s in self.integ.ocr.items():
                     self.fh.write(f"  {sys2char(sys)}:")
                     for sat, v in s.items():
                         self.fh.write(f"  {sat2id(sat)} {self.integ.ocr_t[v]}")
                     self.fh.write("\n") 
                 
-                self.fh.write(" stdev iono:\n")
+                self.fh.write(" Residual ionospheric error stdev:\n")
                 for sys, s in self.integ.sig_ion.items():
                     self.fh.write(f"  {sys2char(sys)}:")
                     for sat, v in s.items():
                         self.fh.write(f"  {sat2id(sat)} {self.integ.sig_ion_t[v]}")
                     self.fh.write("\n") 
                 
-                self.fh.write(" idx iono:\n")
+                self.fh.write(" Index of bounding parameter on change in iono error:\n")
                 for sys, s in self.integ.idx_ion.items():
                     self.fh.write(f"  {sys2char(sys)}:")
                     for sat, v in s.items():
                         self.fh.write(f"  {sat2id(sat)} {self.integ.b_datm_t[v]}")
                     self.fh.write("\n") 
                 
-                self.fh.write(" stdev trop:\n")
+                self.fh.write(" Residual tropospheric error stdev:\n")
                 for sys, s in self.integ.sig_trp.items():
                     self.fh.write(f"  {sys2char(sys)}:")
                     for sat, v in s.items():
                         self.fh.write(f"  {sat2id(sat)} {self.integ.sig_trp_t[v]}")
                     self.fh.write("\n")
                 
-                self.fh.write(" idx trop:\n")
+                self.fh.write(" Index of bounding parameter on change in tropo error:\n")
                 for sys, s in self.integ.idx_trp.items():
                     self.fh.write(f"  {sys2char(sys)}:") 
                     for sat, v in s.items():
@@ -2004,9 +2024,19 @@ class rtcm(cssr, rtcmUtil):
                 self.fh.write(f" IOD area: {self.integ.iod_sa}\n")
                 self.fh.write(f" Validity Period [s]: {self.integ.vp_tbl[self.integ.vp]}\n")
                 self.fh.write(f" Update rate interval [s]: {self.integ.uri*0.1}\n")
+                
+                self.fh.write(f" Service Area Type: {self.integ.atype_t[self.integ.atype]}\n")
                 self.fh.write(f" Continuation Flag: {self.integ.cf}\n")
                 self.fh.write(f" Seq: {self.integ.seq}\n")
-                self.fh.write(f" Area Point (lat, lon):\n {self.integ.pos}\n")
+                if self.integ.atype == 1: # lat/lon
+                    self.fh.write(f" Number of Area Point: {self.integ.npnt}\n")                
+                    self.fh.write(" Area Point (lat, lon):\n")
+                    for pos in self.integ.pos_v:
+                        self.fh.write(f" {pos[0]:10.4f} {pos[1]:10.4f}\n")
+                else: # lat/lon/radius
+                    pos = self.integ.pos_v
+                    self.fh.write(" Area Point (lat, lon, radius): ") 
+                    self.fh.write(f" {pos[0]:10.4f} {pos[1]:10.4f} {pos[2]:10.0f}\n")
 
             elif self.subtype == sRTCM.INTEG_EXT_AREA:  # MT2008
                 self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
@@ -2015,15 +2045,15 @@ class rtcm(cssr, rtcmUtil):
                 self.fh.write(f" IOD area: {self.integ.iod_sa}\n")
                 self.fh.write(f" Validity Period [s]: {self.integ.vp_tbl[self.integ.vp]}\n")
                 self.fh.write(f" Update rate interval [s]: {self.integ.uri*0.1}\n")
-                self.fh.write(f" Service Area Type: {self.integ.atype}\n")
+                self.fh.write(f" Service Area Type: {self.integ.atype_t[self.integ.atype]}\n")
 
                 self.fh.write(f" Continuation Flag: {self.integ.cf}\n")
                 self.fh.write(f" Seq: {self.integ.seq}\n")
 
-                self.fh.write(f" f_ir : {self.integ.f_ir_t[self.integ.f_ir]}\n")
-                self.fh.write(f" f_ttd: {self.integ.f_ttd_t[self.integ.f_ttd]}\n")
-                self.fh.write(f" f_ext: {self.integ.ext_df_t[self.integ.f_ext]}\n")
-                self.fh.write(f" f_exs: {self.integ.exs_df_t[self.integ.f_exs]}\n")
+                self.fh.write(f" Augmentation IR Degradation Factor: {self.integ.f_ir_t[self.integ.f_ir]}\n")
+                self.fh.write(f" Augmentation TTD Degradation Factor: {self.integ.f_ttd_t[self.integ.f_ttd]}\n")
+                self.fh.write(f" Extended Area Time Parameter Degradation Factor: {self.integ.ext_df_t[self.integ.f_ext]}\n")
+                self.fh.write(f" Extended Area Spatial Parameter Degradation Factor: {self.integ.exs_df_t[self.integ.f_exs]}\n")
 
                 self.fh.write(f" Area Point (lat/lon): {self.integ.pos}\n")
 
@@ -3580,27 +3610,28 @@ class rtcm(cssr, rtcmUtil):
 
         if atype == 1:  # Validity Area Parameters defined in Table 10.3-5
             # number of area points DFi201
-            narea = bs.unpack_from('u8', msg, i)[0]
+            npnt = bs.unpack_from('u8', msg, i)[0]
+            self.integ.npnt = npnt
             i += 8
-            self.integ.pos = np.zeros((narea, 3))
-            for k in range(narea):
+            self.integ.pos_v = np.zeros((npnt, 2))
+            for k in range(npnt):
                 # Area Point - Lat DFi202
                 # Area Point - Lon DFi203
                 lat_i, lon_i = bs.unpack_from('s34s35', msg, i)
                 i += 69
                 lat = self.sval(lat_i, 34, 0.000000011)
                 lon = self.sval(lon_i, 35, 0.000000011)
-                self.integ.pos[k, :] = [lat, lon, 0]
+                self.integ.pos_v[k, :] = [lat, lon]
 
         elif atype == 0:  # Validity Radius Data defined in Table 10.3-6
             # Area Point - Lat DFi202
             # Area Point - Lon DFi203
-            # Validity Radius DF057
+            # Validity Radius DFi057
             lat_i, lon_i, r = bs.unpack_from('s34s35u20', msg, i)
             i += 89
             lat = self.sval(lat_i, 34, 0.000000011)
             lon = self.sval(lon_i, 35, 0.000000011)
-            self.integ.pos = [lat, lon, r]
+            self.integ.pos_v = [lat, lon, r]
         return i
 
     def decode_integrity_ext_service_area(self, msg, i):
