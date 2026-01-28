@@ -2103,6 +2103,8 @@ class rtcm(cssr, rtcmUtil):
             elif self.subtype == sRTCM.INTEG_VMAP:  # MT2071
                 self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
                 self.fh.write(f" Number of Area Points: {self.integ.narea:}\n")
+                self.fh.write(f" Continuation Flag: {self.integ.cf}\n")
+                self.fh.write(f" Seq: {self.integ.seq}\n")
                 self.fh.write(" Boundary Points (lat, long, alt, naz):\n")
                 for k in range(self.integ.narea):
                     self.fh.write(" {:2d}\t{:12.9f}\t{:12.9f}\t{:4.0f}\t{:2d}\n".format
@@ -2119,6 +2121,8 @@ class rtcm(cssr, rtcmUtil):
                 self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
                 self.fh.write(f" Number of Area Points: {self.integ.narea:}\n")
                 self.fh.write(f" Multipath Model ID: {model}\n")
+                self.fh.write(f" Continuation Flag: {self.integ.cf}\n")
+                self.fh.write(f" Seq: {self.integ.seq}\n")
                 self.fh.write(" Boundary Points (lat, long, alt), np:\n")
                 for k in range(self.integ.narea):
                     self.fh.write(" {:2d}\t{:12.9f}\t{:12.9f}\t{:4.0f}\t{:2d}\n".format
@@ -3789,13 +3793,13 @@ class rtcm(cssr, rtcmUtil):
         # number of area points DFi201
         # Message Continuation Flag DFi021
         # Multiple Message Sequence Number DFi079
-        tow, narea, mi, seq = bs.unpack_from('u30u8u1u5', msg, i)
+        tow, narea, cf, seq = bs.unpack_from('u30u8u1u5', msg, i)
         i += 44
 
-        self.integ.seq = seq
         self.integ.tow = tow*1e-3
         self.integ.narea = narea
-        self.mi = mi
+        self.integ.cf = cf
+        self.integ.seq = seq
         self.integ.pos = np.zeros((narea, 3))
         self.integ.naz = np.zeros(narea, dtype=int)
         self.integ.azel = {}
@@ -3832,7 +3836,7 @@ class rtcm(cssr, rtcmUtil):
         # GNSS Epoch Time (TOW) DFi008
         # number of area points DFi201
         # multipath model ID DFi209: 0:GMM,1:MBM,2:JM
-        tow, narea, mm_id, self.mi, self.integ.seq = bs.unpack_from(
+        tow, narea, mm_id, self.integ.cf, self.integ.seq = bs.unpack_from(
             'u30u8u3u1u5', msg, i)
         i += 47
         self.integ.tow = tow*1e-3
@@ -4136,8 +4140,10 @@ class rtcm(cssr, rtcmUtil):
         elif self.msgtype == 54:  # SSR integrity test msg
             i = self.decode_sc134_test_header(msg, i)
             if self.subtype == 9:
+                self.subtype = sRTCM.INTEG_VMAP
                 self.decode_integrity_vmap(msg, i)
             elif self.subtype == 10:
+                self.subtype = sRTCM.INTEG_MMAP
                 self.decode_integrity_mmap(msg, i)
             else:
                 self.subtype = -1
