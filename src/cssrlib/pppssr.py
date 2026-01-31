@@ -9,7 +9,7 @@ from cssrlib.gnss import sat2id, sat2prn, rSigRnx, uTYP, uGNSS, rCST
 from cssrlib.gnss import ecef2pos, tropmodel, geodist, satazel, uTideModel
 from cssrlib.gnss import time2str, timediff, gpst2utc, tropmapf
 from cssrlib.gnss import trop_model_tbl, iono_model_tbl, default_config
-from cssrlib.ppp import tidedisp, tidedispIERS2010, shapiro, windupcorr
+from cssrlib.ppp import tidedisp, tidedispIERS2010, shapiro, windupcorr, sunmoonpos
 from cssrlib.peph import antModelRx, antModelTx
 from cssrlib.cssrlib import sCType
 from cssrlib.cssrlib import sCSSRTYPE as sc
@@ -656,7 +656,8 @@ class pppos():
             if self.nav.phw_opt > 0:
                 phw_mode = (False if self.nav.phw_opt == 2 else True)
                 self.nav.phw[sat-1] = windupcorr(obs.t, rs[i, :], vs[i, :],
-                                                 rr_, self.nav.phw[sat-1],
+                                                 rr_, self.nav.rsun, 
+                                                 self.nav.phw[sat-1],
                                                  full=phw_mode)
 
                 # cycle -> m
@@ -738,11 +739,11 @@ class pppos():
                                                     sc.RTCM3_SSR,
                                                     sc.BDS_PPP,
                                                     sc.PVS_PPP):
-
-                antsPR = antModelTx(self.nav, e[i, :], sigsPR,
-                                    sat, obs.t, rs[i, :], sig0)
-                antsCP = antModelTx(self.nav, e[i, :], sigsCP,
-                                    sat, obs.t, rs[i, :], sig0)
+                
+                ants = antModelTx(self.nav, e[i, :], (sigsPR + sigsCP),
+                                  sat, obs.t, rs[i, :], sig0)                
+                antsPR = ants[0:len(sigsPR)]
+                antsCP = ants[len(sigsPR):]
 
             else:
 
@@ -1389,6 +1390,13 @@ class pppos():
             return
 
         self.nav.nsat[0] = len(obs.sat)
+
+        # sun position is updated every 1sec
+        if (self.nav.rsun is None) or \
+            (np.abs(timediff(self.nav.t_rsun,obs.t))>=1.0):
+            self.nav.rsun, _, _ = sunmoonpos(gpst2utc(obs.t))
+            self.nav.t_rsun = obs.t
+                
 
         # GNSS satellite positions, velocities and clock offsets
         # for all satellite in RINEX observations

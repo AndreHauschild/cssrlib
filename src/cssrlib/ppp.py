@@ -274,13 +274,12 @@ def shapiro(rsat, rrcv):
     return corr
 
 
-def windupcorr(time, rs, vs, rr, phw, full=False):
+def windupcorr(time, rs, vs, rr, rsun, phw, full=False):
     """ calculate windup correction """
     ek = vnorm(rr-rs)
     if full:
         # Satellite antenna frame unit vectors assuming standard yaw attitude law
         #
-        rsun, _, _ = sunmoonpos(gpst2utc(time))
         r = -rs
         ezs = r/np.linalg.norm(r)
         r = rsun-rs
@@ -443,7 +442,8 @@ if __name__ == '__main__':
             tn = timeadd(tgps_, k*300)
             eph = findeph(nav.eph, tn, sat)
             rs_, vs_, dts = eph2pos(tn, eph, True)
-            phw_ = windupcorr(tn, rs_, vs_, rr_, phw_)
+            rsun_, _, _ = sunmoonpos(gpst2utc(tn))
+            phw_ = windupcorr(tn, rs_, vs_, rr_, rsun_, phw_)
             t[k] = timediff(tn, tgps_)
             ph_[k] = phw_
             d[k] = shapiro(rs_, rr_)

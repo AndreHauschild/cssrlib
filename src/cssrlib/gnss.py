@@ -9,7 +9,7 @@ import numpy as np
 from datetime import datetime, timezone
 import bitstruct as bs
 import yaml
-
+from numba import njit
 
 gpst0 = [1980, 1, 6, 0, 0, 0]  # GPS system time reference
 gst0 = [1999, 8, 22, 0, 0, 0]  # Galileo system time reference
@@ -951,6 +951,9 @@ class Nav():
 
         # number of satellite (observed, calculated, corrected)
         self.nsat = [0, 0, 0]
+        
+        self.t_rsun = None # reference time of rsun
+        self.rsun = None # placeholder of sun position
 
 
 def epoch2time(ep):
@@ -1208,7 +1211,7 @@ def prn2sat(sys, prn):
         sat = 0
     return sat
 
-
+@njit
 def sat2prn(sat):
     """ convert sat to sys+prn """
     if sat > uGNSS.MAXSAT:
