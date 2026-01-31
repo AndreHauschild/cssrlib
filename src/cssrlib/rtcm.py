@@ -313,6 +313,7 @@ class rtcmUtil:
             sCSSR.MASK: sCType.MASK, sCSSR.CBIAS: sCType.CBIAS,
             sCSSR.PBIAS: sCType.PBIAS, sCSSR.URA: sCType.URA,
             sCSSR.GRID: sCType.TROP, sCSSR.STEC: sCType.STEC,
+            sCSSR.COMBINED: sCType.OC,
             sRTCM.SSR_PBIAS: sCType.PBIAS,
             sRTCM.SSR_TROP: sCType.TROP,
             sRTCM.SSR_STEC: sCType.STEC,
