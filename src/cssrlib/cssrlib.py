@@ -1337,7 +1337,7 @@ class cssr:
         trpw = 0
         if self.lc[inet].flg_trop & 2:
             p = [1, dlat, dlon, dlat*dlon]
-            trph = 2.3+self.lc[inet].ct[0, :]@p
+            trph = self.lc[inet].ct[0, :]@p
             trpw = self.lc[inet].ct[1, :]@p
         if self.lc[inet].flg_trop & 1:
             if self.lc[inet].dth is not None:
