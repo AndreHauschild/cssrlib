@@ -153,7 +153,7 @@ class uGNSS(IntEnum):
     GALMAX = 36
     QZSMAX = 17
     BDSMAX = 63
-    GLOMAX = 27
+    GLOMAX = 32
     SBSMAX = 39
     IRNMAX = 14
 
@@ -170,7 +170,7 @@ class uGNSS(IntEnum):
     MINPRNGPS = 1
     MAXPRNGPS = 36
     MINPRNGLO = 1
-    MAXPRNGLO = 27
+    MAXPRNGLO = 32
     MINPRNGAL = 1
     MAXPRNGAL = 36
     MINPRNQZS = 193
