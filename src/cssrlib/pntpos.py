@@ -134,6 +134,8 @@ class stdpos(pppos):
 
         self.nav.elmin = np.deg2rad(10.0)
 
+        self.nav.th_clk_rst = 1e2 # threshold value for clock bias initialize/reset
+
         self.nav.obad = None
 
         self.nsat = 0
@@ -560,7 +562,7 @@ class stdpos(pppos):
         #
         v, H, R = self.sdres(obs, xp, y, e, sat, el)
 
-        if abs(np.mean(v)) > 1e3:  # clock bias initialize/reset
+        if abs(np.mean(v)) > self.nav.th_clk_rst:  # clock bias initialize/reset
             ic = self.ICB()
             idx_ = np.where(v != 0.0)[0]
             xp[ic] = np.mean(v[idx_])
