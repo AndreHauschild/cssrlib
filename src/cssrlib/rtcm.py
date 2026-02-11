@@ -204,6 +204,7 @@ class Integrity():
         self.pidssr = 0  # SSR provider ID
         self.sidssr = 0  # SSR solution type
         self.iodssr = 0  # SSR iod
+        self.inet = 0
 
         self.tow = 0
         self.iod_sys = {}  # issue of GNSS satellite mask DFi010 (b2)
@@ -403,6 +404,8 @@ class rtcmUtil:
                 return uGNSS.SBS
             elif msgtype >= 1258 and msgtype < 1264:
                 return uGNSS.BDS
+            elif msgtype == 1264:
+                return uGNSS.NONE
             elif msgtype >= 1265 and msgtype < 1271:  # proposed phase bias
                 tbl_t = {1265: uGNSS.GPS, 1266: uGNSS.GLO, 1267: uGNSS.GAL,
                          1268: uGNSS.QZS, 1269: uGNSS.SBS, 1270: uGNSS.BDS}
@@ -676,6 +679,8 @@ class rtcmUtil:
         for sys_ in self.ssr_t.keys():
             if msgtype >= self.ssr_t[sys_] and msgtype <= self.ssr_t[sys_]+6:
                 return True
+            if msgtype >= 1264 and msgtype <= 1270:  # VTEC, PBIAS (obsoleted)
+                return True
             if tstmsg and msgtype >= 60 and msgtype <= 100:  # SSR test message
                 return True
         return False
@@ -770,6 +775,7 @@ class rtcm(cssr, rtcmUtil):
 
         self.pid = 0  # SSR Provider ID
         self.sid = 0  # SSR Solution Type
+        self.inet = 0
         self.mi = False
 
         self.nrtk_r = {}
@@ -786,8 +792,10 @@ class rtcm(cssr, rtcmUtil):
         self.antc = {}
         self.integ = Integrity()
         self.test_mode = False  # for interop testing in SC134
+        
+        self.mt_skip = [] # skip decode for the specified message types
 
-    def ssig2rsig(self, sys: uGNSS, utyp: uTYP, ssig):
+    def ssig2rsig(self, sys: uGNSS, utyp=None, ssig=None):
         """ convert ssig to rSigRnx """
         gps_tbl = {
             0: uSIG.L1C,
@@ -807,6 +815,7 @@ class rtcm(cssr, rtcmUtil):
             18: uSIG.L1L,
             19: uSIG.L1X,
         }
+        
         glo_tbl = {
             0: uSIG.L1C,
             1: uSIG.L1P,
@@ -896,6 +905,13 @@ class rtcm(cssr, rtcmUtil):
         }
 
         usig_tbl = usig_tbl_[sys]
+        
+        if ssig is None:
+            return len(usig_tbl)
+        
+        if ssig not in usig_tbl:
+            print(f"sys={sys} sig={ssig} undefined.")
+            return rSigRnx()
         return rSigRnx(sys, utyp, usig_tbl[ssig])
 
     def sync(self, buff, k):
@@ -945,6 +961,7 @@ class rtcm(cssr, rtcmUtil):
 
         if self.subtype == sCSSR.PBIAS:
             ci, mw = bs.unpack_from('u1u1', msg, i)
+            self.iexpb = 0
             i += 2
         elif self.subtype == sRTCM.SSR_PBIAS:
             # Satellite Yaw Information Indicator DF486
@@ -1126,6 +1143,9 @@ class rtcm(cssr, rtcmUtil):
             if sat_ not in self.lc[inet].cbias:
                 self.lc[inet].cbias[sat_] = {}
 
+            if nsig > self.ssig2rsig(sys):
+                break
+
             for j in range(nsig):
                 sig, cb = bs.unpack_from('u5s14', msg, i)
                 i += 19
@@ -1158,7 +1178,7 @@ class rtcm(cssr, rtcmUtil):
         self.iodssr = v['iodssr']
         self.udi[sCType.PBIAS] = v['udi']
         self.mi = v['mi']
-        self.iyaw = v['iyaw']
+        self.iyaw = v['iyaw'] if 'iyaw' in v.keys() else True
 
         inet = self.inet
 
@@ -1185,6 +1205,9 @@ class rtcm(cssr, rtcmUtil):
                 self.lc[inet].si[sat_] = {}
                 self.lc[inet].di[sat_] = {}
                 self.lc[inet].wl[sat_] = {}
+
+            if nsig > self.ssig2rsig(sys):
+                break
 
             for j in range(nsig):
                 # tracking mode: DF461
@@ -1654,7 +1677,7 @@ class rtcm(cssr, rtcmUtil):
                 self.fh.write(" {:s}\t".format(sat2id(sat_)))
 
                 if self.iyaw:
-                    self.fh.write("\t{:7.4f}\t{:7.4f}\t"
+                    self.fh.write("{:7.4f}\t{:7.4f}\t"
                                   .format(self.lc[inet].yaw[sat_],
                                           self.lc[inet].dyaw[sat_]))
 
@@ -3354,6 +3377,8 @@ class rtcm(cssr, rtcmUtil):
         i += 82
 
         self.integ.tow = tow*1e-3
+        self.tow = self.integ.tow        
+        self.time = gpst2time(self.week, self.tow)
         self.integ.pid = pid
         self.integ.aid = area
         self.integ.ilvl = ilvl
@@ -3494,6 +3519,8 @@ class rtcm(cssr, rtcmUtil):
         i += 58
 
         self.integ.tow = tow*1e-3
+        self.tow = self.integ.tow        
+        self.time = gpst2time(self.week, self.tow)
         self.integ.iod_ip = iod_ip
         self.integ.pid = pid
         self.integ.aid = area
@@ -3594,6 +3621,8 @@ class rtcm(cssr, rtcmUtil):
 
         self.integ.iod_sa = iod_sa
         self.integ.tow = tow*1e-3
+        self.tow = self.integ.tow        
+        self.time = gpst2time(self.week, self.tow)
         self.integ.pid = pid
         self.integ.aid = area
         self.integ.vp = vp
@@ -3666,6 +3695,8 @@ class rtcm(cssr, rtcmUtil):
         i += 10
 
         self.integ.tow = tow*1e-3
+        self.tow = self.integ.tow        
+        self.time = gpst2time(self.week, self.tow)
         self.integ.iod_sa = iod_sa
         self.integ.pid = pid
         self.integ.aid = area
@@ -3722,6 +3753,8 @@ class rtcm(cssr, rtcmUtil):
         i += 32
 
         self.integ.tow = tow*1e-3
+        self.tow = self.integ.tow        
+        self.time = gpst2time(self.week, self.tow)
         self.integ.pid = pid
         self.integ.vp = vp
         self.integ.uri = uri
@@ -3746,6 +3779,8 @@ class rtcm(cssr, rtcmUtil):
         i += 84
 
         self.integ.tow = tow*1e-3
+        self.tow = self.integ.tow        
+        self.time = gpst2time(self.week, self.tow)
         self.integ.pid = pid
         self.integ.uri = uri
         self.integ.aid = area
@@ -3798,6 +3833,8 @@ class rtcm(cssr, rtcmUtil):
         i += 44
 
         self.integ.tow = tow*1e-3
+        self.tow = self.integ.tow        
+        self.time = gpst2time(self.week, self.tow)
         self.integ.narea = narea
         self.integ.cf = cf
         self.integ.seq = seq
@@ -3841,6 +3878,8 @@ class rtcm(cssr, rtcmUtil):
             'u30u8u3u1u5', msg, i)
         i += 47
         self.integ.tow = tow*1e-3
+        self.tow = self.integ.tow        
+        self.time = gpst2time(self.week, self.tow)
         self.integ.narea = narea
         self.integ.pos = np.zeros((narea, 3))
         self.integ.mm_id = mm_id
@@ -3924,6 +3963,8 @@ class rtcm(cssr, rtcmUtil):
         i += 46
 
         self.integ.tow = tow*1e-3
+        self.tow = self.integ.tow        
+        self.time = gpst2time(self.week, self.tow)
         self.integ.mask_sys = mask_sys
 
         vp, uri = bs.unpack_from('u4u16', msg, i)
@@ -3994,6 +4035,9 @@ class rtcm(cssr, rtcmUtil):
             return i, obs, eph, geph, seph
 
         self.subtype = subtype
+
+        if self.msgtype in self.mt_skip:
+            return i
 
         # SSR messages
         if self.msgtype in (1057, 1063, 1240, 1246, 1252, 1258):
