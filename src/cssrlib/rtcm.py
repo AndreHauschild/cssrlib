@@ -198,7 +198,7 @@ class Integrity():
 
         self.pid = 0  # augmentation provider id DFi027 (0-4095)
         self.vp = 0  # validity period DFi065 (0-15)
-        self.uri = 0  # update rate interval DFi067 (b16)
+        self.udi = 0  # update rate interval DFi067 (b16)
 
         # placeholder for RTCM SSR
         self.pidssr = 0  # SSR provider ID
@@ -935,13 +935,15 @@ class rtcm(cssr, rtcmUtil):
 
     def decode_head(self, msg, i, sys=uGNSS.NONE):
         """ decode the header of ssr message """
-        if self.msgtype == 4076 or sys != uGNSS.GLO:
-            blen = 20
+        
+        if sys==uGNSS.GLO and self.msgtype != 4076:
+            self.tod = bs.unpack_from('u17', msg, i)[0]     
+            i += 17
+            self.time = utc2gpst(glo2time(self.time, self.tod))
         else:
-            blen = 17
-        self.tow = bs.unpack_from('u'+str(blen), msg, i)[0]
-        self.time = gpst2time(self.week, self.tow)
-        i += blen
+            self.tow = bs.unpack_from('u20', msg, i)[0]   
+            i += 20               
+            self.time = gpst2time(self.week, self.tow)
 
         if self.subtype not in [sRTCM.SSR_PBIAS_EX]:
             udi, mi = bs.unpack_from('u4b1', msg, i)
@@ -1545,6 +1547,13 @@ class rtcm(cssr, rtcmUtil):
             self.fh.write(" {:s}\t{:8.4f}\n".format(sat2id(sat_),
                                                     self.lc[0].ura[sat_]))
 
+    def out_log_integ_head(self):
+        vp = self.integ.vp_tbl[self.integ.vp]
+        self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
+        self.fh.write(f" Provider Id: {self.integ.pid}\n")
+        self.fh.write(f" Validity Period [s]: {vp:6d}\n")
+        self.fh.write(f" Update rate interval [s]: {self.integ.udi*0.1}\n")
+
     def out_log(self, obs=None, eph=None, geph=None, seph=None):
         """ output ssr message to log file """
         sys = -1
@@ -1769,36 +1778,6 @@ class rtcm(cssr, rtcmUtil):
             self.fh.write(" {:20s}{:6d}\n".format("Number of Signals:",
                                                   self.nsig))
 
-        if self.subtype in (sRTCM.INTEG_SSR, sRTCM.INTEG_SSR_IONO,
-                            sRTCM.INTEG_SSR_TROP):
-            self.fh.write(" {:20s}{:6d} TOW={:6d}\n".
-                          format("INTEG-SSR:", self.msgtype,
-                                 int(self.integ.tow)))
-            self.fh.write(" {:20s}{:6d}\n".format("ProviderID:",
-                                                  self.integ.pid))
-
-            if self.subtype == sRTCM.INTEG_SSR:
-                self.fh.write(" {:20s}{:6.1f}\n".format("Varidity Period [s]:",
-                                        self.integ.vp_tbl[self.integ.vp]))
-                self.fh.write(" {:20s}{:6.1f}\n".format("Update Interval:",
-                                                        self.integ.uri))
-
-            self.fh.write(" {:20s}{:04x}\n".format("Constellation Mask:",
-                                                   self.integ.mask_sys))
-            self.fh.write(" IOD GNSS Mask: ")
-            for sys in self.integ.iod_sys.keys():
-                self.fh.write(" {:8s}: {:1d}".format(
-                    sys2str(sys), self.integ.iod_sys[sys]))
-            self.fh.write("\n")
-
-            for sys in self.integ.flag.keys():
-                self.fh.write(" NIntegrity Flag: ")
-                for sat in self.integ.flag[sys]:
-                    self.fh.write(" {:3s}:{:2d}".format(
-                        sat2id(sat), self.integ.flag[sys][sat]))
-                self.fh.write("\n")
-            self.fh.flush()
-
         if self.msgtype == 54 or self.msgtype in self.integ.mt_integ_t:  # RTCM SC134 integrity messages
             if self.msgtype == 54:
                 self.fh.write(f" Message Type: {self.msgtype}\n")
@@ -1806,11 +1785,7 @@ class rtcm(cssr, rtcmUtil):
                 self.fh.write(f" Message Type: {self.integ.mt_integ_t[self.msgtype]} ({self.msgtype})\n")
 
             if self.subtype == sRTCM.INTEG_MIN: # MT2000
-                self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
-                self.fh.write(f" Provider Id: {self.integ.pid}\n")
-
-                self.fh.write(f" Validity Period [s]: {self.integ.vp_tbl[self.integ.vp]}\n")
-                self.fh.write(f" Update rate interval [s]: {self.integ.uri*0.1}\n")
+                self.out_log_integ_head()
 
                 self.fh.write(" Issue of Sat Mask: ")
                 for sys in self.integ.iod_sys:
@@ -1869,15 +1844,12 @@ class rtcm(cssr, rtcmUtil):
                     self.fh.write("\n") 
                     
             elif self.subtype == sRTCM.INTEG_EXT:  # MT2005
-                self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
-                self.fh.write(f" Provider Id: {self.integ.pid}\n")
+                self.out_log_integ_head()
+            
                 self.fh.write(f" Area ID: {self.integ.aid}\n")
                 self.fh.write(f" Integrity Level: {self.integ.ilvl}\n")
                 self.fh.write(f" TTT: {self.integ.ttt}\n")
                 self.fh.write(f" Solution Type: {self.integ.decode_sol_t(self.integ.stype)}\n")
-
-                self.fh.write(f" Validity Period [s]: {self.integ.vp_tbl[self.integ.vp]}\n")
-                self.fh.write(f" Update rate interval [s]: {self.integ.uri*0.1}\n")
 
                 self.fh.write(f" Paug: {self.integ.Paug}\n")
                 self.fh.write(f" IOD param: {self.integ.iod_p}\n")
@@ -1954,12 +1926,10 @@ class rtcm(cssr, rtcmUtil):
                     self.fh.write("\n") 
 
             elif self.subtype == sRTCM.INTEG_EXT_SIS:  # MT2006
-                self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
+                self.out_log_integ_head()
+                
                 self.fh.write(f" IOD param: {self.integ.iod_ip}\n")
-                self.fh.write(f" Provider Id: {self.integ.pid}\n")
                 self.fh.write(f" Service Area ID: {self.integ.aid}\n")
-                self.fh.write(f" Validity Period [s]: {self.integ.vp_tbl[self.integ.vp]}\n")
-                self.fh.write(f" Update rate interval [s]: {self.integ.uri*0.1}\n")
                 self.fh.write(f" Time Correlation Integrity/Continuity Flag: {self.integ.fc}\n")
                 
                 b = self.integ.bias
@@ -2042,16 +2012,15 @@ class rtcm(cssr, rtcmUtil):
                     self.fh.write("\n") 
                 
             elif self.subtype == sRTCM.INTEG_PRI_AREA:  # MT2007
-                self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
-                self.fh.write(f" Provider ID: {self.integ.pid}\n")
-                self.fh.write(f" Area ID: {self.integ.aid}\n")
-                self.fh.write(f" IOD area: {self.integ.iod_sa}\n")
-                self.fh.write(f" Validity Period [s]: {self.integ.vp_tbl[self.integ.vp]}\n")
-                self.fh.write(f" Update rate interval [s]: {self.integ.uri*0.1}\n")
+                self.out_log_integ_head()
                 
+                self.fh.write(f" Area ID: {self.integ.aid}\n")
+                self.fh.write(f" IOD area: {self.integ.iod_sa}\n")                
                 self.fh.write(f" Service Area Type: {self.integ.atype_t[self.integ.atype]}\n")
+                
                 self.fh.write(f" Continuation Flag: {self.integ.cf}\n")
                 self.fh.write(f" Seq: {self.integ.seq}\n")
+                
                 if self.integ.atype == 1: # lat/lon
                     self.fh.write(f" Number of Area Point: {self.integ.npnt}\n")                
                     self.fh.write(" Area Point (lat, lon):\n")
@@ -2063,12 +2032,10 @@ class rtcm(cssr, rtcmUtil):
                     self.fh.write(f" {pos[0]:10.4f} {pos[1]:10.4f} {pos[2]:10.0f}\n")
 
             elif self.subtype == sRTCM.INTEG_EXT_AREA:  # MT2008
-                self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
-                self.fh.write(f" Provider ID: {self.integ.pid}\n")
+                self.out_log_integ_head()              
+                
                 self.fh.write(f" Area ID: {self.integ.aid}\n")
                 self.fh.write(f" IOD area: {self.integ.iod_sa}\n")
-                self.fh.write(f" Validity Period [s]: {self.integ.vp_tbl[self.integ.vp]}\n")
-                self.fh.write(f" Update rate interval [s]: {self.integ.uri*0.1}\n")
                 self.fh.write(f" Service Area Type: {self.integ.atype_t[self.integ.atype]}\n")
 
                 self.fh.write(f" Continuation Flag: {self.integ.cf}\n")
@@ -2082,20 +2049,19 @@ class rtcm(cssr, rtcmUtil):
                 self.fh.write(f" Area Point (lat/lon): {self.integ.pos}\n")
 
             elif self.subtype == sRTCM.INTEG_QUALITY:  # MT2051
-                self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
-                self.fh.write(f" Provider Id: {self.integ.pid}\n")
-                self.fh.write(f" Validity Period [s]: {self.integ.vp_tbl[self.integ.vp]}\n")
-                self.fh.write(f" Update rate interval [s]: {self.integ.uri*0.1}\n")
+                self.out_log_integ_head()
+                
                 self.fh.write(f" Network ID: {self.integ.nid}\n")
                 self.fh.write(f" Quality Indicator [m]: {self.integ.qi}\n")
 
             elif self.subtype == sRTCM.INTEG_CNR:  # MT2091
 
-                self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
+                self.fh.write(f" TOW (s): {self.integ.tow:9.3f}\n")
                 self.fh.write(f" Provider ID: {self.integ.pid}\n")
-                self.fh.write(f" Area ID: {self.integ.aid}\n")
-                self.fh.write(f" Update rate interval [s]: {self.integ.uri*0.1}\n")
+                self.fh.write(f" Update rate interval [s]: {self.integ.udi*0.1}\n")
 
+                self.fh.write(f" Area ID: {self.integ.aid}\n")
+                
                 self.fh.write(" CNR [dB-Hz]:\n")
                 for sys, s in self.integ.cnr.items():
                     self.fh.write(f"  {sys2char(sys)}:") 
@@ -2125,7 +2091,8 @@ class rtcm(cssr, rtcmUtil):
                     self.fh.write("\n") 
 
             elif self.subtype == sRTCM.INTEG_VMAP:  # MT2071
-                self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
+                self.fh.write(f" TOW (s): {self.integ.tow:9.3f}\n")
+                
                 self.fh.write(f" Number of Area Points: {self.integ.narea:}\n")
                 self.fh.write(f" Continuation Flag: {self.integ.cf}\n")
                 self.fh.write(f" Seq: {self.integ.seq}\n")
@@ -2142,11 +2109,13 @@ class rtcm(cssr, rtcmUtil):
 
             elif self.subtype == sRTCM.INTEG_MMAP:  # 2072
                 model = self.integ.mm_model_t[self.integ.mm_id]
-                self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
+                self.fh.write(f" TOW (s): {self.integ.tow:9.3f}\n")
+                
                 self.fh.write(f" Number of Area Points: {self.integ.narea:}\n")
                 self.fh.write(f" Multipath Model ID: {model}\n")
                 self.fh.write(f" Continuation Flag: {self.integ.cf}\n")
                 self.fh.write(f" Seq: {self.integ.seq}\n")
+                
                 self.fh.write(" Boundary Points (lat, long, alt), np:\n")
                 for k in range(self.integ.narea):
                     self.fh.write(" {:2d}\t{:12.9f}\t{:12.9f}\t{:4.0f}\t{:2d}\n".format
@@ -2176,6 +2145,26 @@ class rtcm(cssr, rtcmUtil):
                                               (self.integ.mm_param[k][j][i+1]))
                             self.fh.write("\n")
 
+            self.fh.flush()
+
+        if self.subtype in (sRTCM.INTEG_SSR, sRTCM.INTEG_SSR_IONO,
+                            sRTCM.INTEG_SSR_TROP):
+            self.out_log_integ_head()
+            
+            self.fh.write(" {:20s}{:04x}\n".format("Constellation Mask:",
+                                                   self.integ.mask_sys))
+            self.fh.write(" IOD GNSS Mask: ")
+            for sys in self.integ.iod_sys.keys():
+                self.fh.write(" {:8s}: {:1d}".format(
+                    sys2str(sys), self.integ.iod_sys[sys]))
+            self.fh.write("\n")
+
+            for sys in self.integ.flag.keys():
+                self.fh.write(" NIntegrity Flag: ")
+                for sat in self.integ.flag[sys]:
+                    self.fh.write(" {:3s}:{:2d}".format(
+                        sat2id(sat), self.integ.flag[sys][sat]))
+                self.fh.write("\n")
             self.fh.flush()
 
         if eph is not None:
@@ -3287,11 +3276,11 @@ class rtcm(cssr, rtcmUtil):
 
         # constellation integirity status DFi029
         # constellation monitoring status DFi030
-        c_integ, c_status, vp, uri = bs.unpack_from('u16u16u4u16', msg, i)
+        c_integ, c_status, vp, udi = bs.unpack_from('u16u16u4u16', msg, i)
         i += 52
 
         self.integ.vp = vp  # Validity Period DFi065 (0-15)
-        self.integ.uri = uri  # update rate interval DFi067 (0.1)
+        self.integ.udi = udi  # update rate interval DFi067 (0.1)
 
         sys_t, nsys = self.decode_mask(mask_sys, 16, ofst=0)
 
@@ -3388,12 +3377,12 @@ class rtcm(cssr, rtcmUtil):
         # GNSS Constellation Mask DFi013
         # Validity Period DFi065 (0-15)
         # update rate interval DFi067 (0.1)
-        mask_sys, vp, uri = bs.unpack_from('u16u4u16', msg, i)
+        mask_sys, vp, udi = bs.unpack_from('u16u4u16', msg, i)
         i += 36
 
         sys_t, nsys = self.decode_mask(mask_sys, 16, ofst=0)
         self.integ.vp = vp  # Validity Period DFi065 (0-15)
-        self.integ.uri = uri  # update rate interval DFi067 (0.1)
+        self.integ.udi = udi  # update rate interval DFi067 (0.1)
 
         # Paug Bundling flag DFi066
         f_paug = bs.unpack_from('b1', msg, i)[0]
@@ -3529,11 +3518,11 @@ class rtcm(cssr, rtcmUtil):
         # Validity Period DFi065 (0-15)
         # update rate interval DFi067 (0.1)
         # Time correlation integrity/continuity flag DFi137
-        mask_sys, vp, uri, fc = bs.unpack_from('u16u4u16b1', msg, i)
+        mask_sys, vp, udi, fc = bs.unpack_from('u16u4u16b1', msg, i)
         i += 37
 
         self.integ.vp = vp
-        self.integ.uri = uri
+        self.integ.udi = udi
         self.integ.fc = fc
 
         # Bounding inter-constellation bias error parameter DFi132
@@ -3545,7 +3534,7 @@ class rtcm(cssr, rtcmUtil):
 
         sys_t, nsys = self.decode_mask(mask_sys, 16, ofst=0)
         self.integ.vp = vp  # Validity Period DFi065 (0-15)
-        self.integ.uri = uri  # update rate interval DFi067 (0.1)
+        self.integ.udi = udi  # update rate interval DFi067 (0.1)
 
         # constellation-specific part
         for sys_ in sys_t:
@@ -3634,10 +3623,10 @@ class rtcm(cssr, rtcmUtil):
         # service area rtpe DFi056
         # service area parameter continuation flag DFi041
         # multiple message sequence number
-        uri, atype, cf, seq = bs.unpack_from('u16u2u1u5', msg, i)
+        udi, atype, cf, seq = bs.unpack_from('u16u2u1u5', msg, i)
         i += 24
 
-        self.integ.uri = uri
+        self.integ.udi = udi
         self.integ.atype = atype
         self.integ.cf = cf
         self.integ.seq = seq
@@ -3684,7 +3673,7 @@ class rtcm(cssr, rtcmUtil):
         # service area rtpe DFi056
         # service area parameter continuation flag DFi041
         # multiple message sequence number DFi079
-        uri, atype, cf, seq = bs.unpack_from('u16u2u1u5', msg, i)
+        udi, atype, cf, seq = bs.unpack_from('u16u2u1u5', msg, i)
         i += 24
 
         # Augmentation IR Degradation Factor DFi140
@@ -3701,7 +3690,7 @@ class rtcm(cssr, rtcmUtil):
         self.integ.pid = pid
         self.integ.aid = area
         self.integ.vp = vp
-        self.integ.uri = uri
+        self.integ.udi = udi
         self.integ.atype = atype
         self.integ.cf = cf
         self.integ.seq = seq
@@ -3742,22 +3731,22 @@ class rtcm(cssr, rtcmUtil):
         # GPS Epoch Time (TOW) DFi008
         # augmentation service provider id DFi027
         # Validity Period DFi065 (0-15)
-
-        tow, pid, vp = bs.unpack_from('u30u12u4', msg, i)
-        i += 46
-
         # update rate interval DFi067 (0.1)
+        
+        tow, pid, vp, udi = bs.unpack_from('u30u12u4u16', msg, i)
+        i += 62
+
         # network id DFi071
         # quality indicator mask DFi061
-        uri, nid, mask_q = bs.unpack_from('u16u8u8', msg, i)
-        i += 32
+        nid, mask_q = bs.unpack_from('u8u8', msg, i)
+        i += 16
 
         self.integ.tow = tow*1e-3
         self.tow = self.integ.tow        
         self.time = gpst2time(self.week, self.tow)
         self.integ.pid = pid
         self.integ.vp = vp
-        self.integ.uri = uri
+        self.integ.udi = udi
         self.integ.nid = nid
 
         idx_q, np_ = self.decode_mask(mask_q, 8, ofst=0)
@@ -3775,14 +3764,14 @@ class rtcm(cssr, rtcmUtil):
         # update rate interval DFi067 (0.1)
         # service area id DFi075
         # constellation mask DFi013
-        pid, tow, uri, area, mask_c = bs.unpack_from('u12u30u16u10u16', msg, i)
+        pid, tow, udi, area, mask_c = bs.unpack_from('u12u30u16u10u16', msg, i)
         i += 84
 
         self.integ.tow = tow*1e-3
         self.tow = self.integ.tow        
         self.time = gpst2time(self.week, self.tow)
         self.integ.pid = pid
-        self.integ.uri = uri
+        self.integ.udi = udi
         self.integ.aid = area
 
         # constellation specific part
@@ -3967,12 +3956,12 @@ class rtcm(cssr, rtcmUtil):
         self.time = gpst2time(self.week, self.tow)
         self.integ.mask_sys = mask_sys
 
-        vp, uri = bs.unpack_from('u4u16', msg, i)
+        vp, udi = bs.unpack_from('u4u16', msg, i)
         i += 20
         # Validity Period DFi065 (0-15)
         self.integ.vp = self.integ.vp_tbl[vp]
         # update rate interval DFi067 (0.1)
-        self.integ.uri = uri*0.1
+        self.integ.udi = udi*0.1
 
         sys_t, nsys = self.decode_mask(mask_sys, 16, ofst=0)
         iod_sys = {}
@@ -4443,7 +4432,7 @@ class rtcme(cssre, rtcmUtil):
         # validity period DFi065
         # update rate interval DFi067
         vp = self.integ.vp_r_tbl[self.integ.vp]
-        bs.pack_into('u4u16', msg, i, vp, self.integ.uri*10)
+        bs.pack_into('u4u16', msg, i, vp, self.integ.udi*10)
         i += 20
 
         for sys in sys_t:
