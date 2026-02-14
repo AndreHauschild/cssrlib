@@ -327,6 +327,25 @@ class rtcmUtil:
         1060: (uGNSS.GPS, sCType.OC),
         1061: (uGNSS.GPS, sCType.URA),
         1062: (uGNSS.GPS, sCType.HCLOCK),
+        1063: (uGNSS.GLO, sCType.ORBIT),
+        1064: (uGNSS.GLO, sCType.CLOCK),
+        1065: (uGNSS.GLO, sCType.CBIAS),
+        1066: (uGNSS.GLO, sCType.OC),
+        1067: (uGNSS.GLO, sCType.URA),
+        1068: (uGNSS.GLO, sCType.HCLOCK),
+        1240: (uGNSS.GAL, sCType.ORBIT),
+        1241: (uGNSS.GAL, sCType.CLOCK),
+        1242: (uGNSS.GAL, sCType.CBIAS),
+        1243: (uGNSS.GAL, sCType.OC),
+        1244: (uGNSS.GAL, sCType.URA),
+        1245: (uGNSS.GAL, sCType.HCLOCK),
+        1264: (uGNSS.NONE, sCType.VTEC),
+        1265: (uGNSS.GPS, sCType.PBIAS),
+        1266: (uGNSS.GLO, sCType.PBIAS),
+        1267: (uGNSS.GAL, sCType.PBIAS),
+        1268: (uGNSS.QZS, sCType.PBIAS),
+        1269: (uGNSS.SBS, sCType.PBIAS),
+        1270: (uGNSS.BDS, sCType.PBIAS),
         41: (uGNSS.GLO, sCType.ORBIT),
         42: (uGNSS.GLO, sCType.CLOCK),
         43: (uGNSS.GLO, sCType.CBIAS),
@@ -376,6 +395,33 @@ class rtcmUtil:
         100: (uGNSS.QZS, sCType.STEC),
     }
 
+    ssrt_t = {
+        sCType.ORBIT: "ORBIT",
+        sCType.CLOCK: "CLOCK",
+        sCType.OC: "ORBIT/CLOCK",
+        sCType.URA: "URA",
+        sCType.CBIAS: "CODE-BIAS",
+        sCType.PBIAS: "PHASE-BIAS",
+        sCType.META: "META",
+        sCType.HCLOCK: "HIGH-RATE CLOCK",
+        sCType.PBIAS_EX: "PHASE-BIAS EXTENDED",
+        sCType.SATANT: "SATELLITE ANTENNA",
+        sCType.TROP: "TROP",
+        sCType.STEC: "STEC",
+        sCType.VTEC: "VTEC",
+        }
+    
+    igsssrt_t = {
+        sCSSR.VTEC: "VTEC",
+        sCSSR.ORBIT: "ORBIT",
+        sCSSR.CLOCK: "CLOCK",
+        sCSSR.COMBINED: "ORBIT/CLOCK",
+        sCSSR.HCLOCK: "HIGH-RATE CLOCK",
+        sCSSR.CBIAS: "CODE-BIAS",
+        sCSSR.PBIAS: "PHASE-BIAS",        
+        sCSSR.URA: "URA",        
+        }
+    
     def mt2sct(self, s):
         """ SSR Message type to SCType """
         return self.ssrtype_t[s]
@@ -1409,7 +1455,7 @@ class rtcm(cssr, rtcmUtil):
                 self.subtype = sCSSR.COMBINED
                 i = self.decode_cssr_comb(msg, i)
             elif st == 4:
-                self.subtype = sCSSR.CLOCK
+                self.subtype = sCSSR.HCLOCK
                 i = self.decode_cssr_hclk(msg, i)
             elif st == 5:
                 self.subtype = sCSSR.CBIAS
@@ -1549,7 +1595,7 @@ class rtcm(cssr, rtcmUtil):
 
     def out_log_integ_head(self):
         vp = self.integ.vp_tbl[self.integ.vp]
-        self.fh.write(f" TOF (s): {self.integ.tow:9.3f}\n")
+        self.fh.write(f" TOW (s): {self.integ.tow:9.3f}\n")
         self.fh.write(f" Provider Id: {self.integ.pid}\n")
         self.fh.write(f" Validity Period [s]: {vp:6d}\n")
         self.fh.write(f" Update rate interval [s]: {self.integ.udi*0.1}\n")
@@ -1557,12 +1603,18 @@ class rtcm(cssr, rtcmUtil):
     def out_log(self, obs=None, eph=None, geph=None, seph=None):
         """ output ssr message to log file """
         sys = -1
-        if self.is_ssrtype(self.msgtype, True):
-            sys = self.get_ssr_sys(self.msgtype)
         inet = self.inet
         self.fh.write("{:4d}\t{:s}\n".format(self.msgtype,
                                              time2str(self.time)))
 
+        if self.is_ssrtype(self.msgtype, True):
+            sys = self.get_ssr_sys(self.msgtype)
+            sys, type_ = self.ssrtype_t[self.msgtype]
+            self.fh.write(f" Message Type: RTCM-SSR {self.ssrt_t[type_]} {sys2str(sys)}\n")
+
+        if self.msgtype == 4076: # IGS-SSR
+            self.fh.write(f" Message Type: IGS-SSR {self.igsssrt_t[self.subtype]} {sys2str(self.sysref)}\n")
+            
         if sys > 0 and self.subtype not in [sRTCM.SSR_META, sRTCM.SSR_GRID]:
             j = self.sc_t[self.subtype]
             self.fh.write(f" Update Interval: {self.udint_t[self.udi[j]]}[s]")

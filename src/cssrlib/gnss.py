@@ -1308,7 +1308,7 @@ def sys2str(sys):
                 uGNSS.QZS: 'QZSS', uGNSS.SBS: 'SBAS', uGNSS.IRN: 'IRNSS'}
 
     if sys not in gnss_tbl:
-        return "???"
+        return ""
     else:
         return gnss_tbl[sys]
 

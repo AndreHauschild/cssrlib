@@ -60,7 +60,7 @@ class sCSSR(IntEnum):
     ATMOS = 12
     AUTH = 13
     VTEC = 16
-
+    HCLOCK = 19
 
 class sCType(IntEnum):
     """ class to define correction message types """
