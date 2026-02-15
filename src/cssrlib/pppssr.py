@@ -679,7 +679,7 @@ class pppos():
                     elif sys == uGNSS.GAL:
                         sig0 = (rSigRnx("EC1C"), rSigRnx("EC5Q"))
                     elif sys == uGNSS.QZS:
-                        sig0 = (rSigRnx("JC1C"), rSigRnx("JC2S"))
+                        sig0 = (rSigRnx("JC1C"), rSigRnx("JC5Q"))
 
                 elif cs.cssrmode == sc.GAL_HAS_SIS:
 

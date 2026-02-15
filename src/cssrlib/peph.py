@@ -825,7 +825,11 @@ def antModelTx(nav, e, sigs, sat, time, rs, sig0=None):
 
             # Satellite PCO in local antenna frame
             #
-            off0 += fac0_*ant.off[sig]
+            if sig in ant.off:
+                off0 += fac0_*ant.off[sig]
+            else:
+                print(f"sig={sig} not in antenna database.")
+                off0 = np.ones((1,3))*np.nan
 
     # Interpolate PCV and map PCO on line-of-sight vector
     #
