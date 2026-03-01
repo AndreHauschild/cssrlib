@@ -7,7 +7,7 @@ import numpy as np
 from cssrlib.ephemeris import satposs
 from cssrlib.gnss import sat2id, sat2prn, rSigRnx, uTYP, uGNSS, rCST
 from cssrlib.gnss import ecef2pos, tropmodel, geodist, satazel, uTideModel
-from cssrlib.gnss import time2str, timediff, gpst2utc, tropmapf
+from cssrlib.gnss import time2str, timediff, gpst2utc, tropmapf, id2sat
 from cssrlib.gnss import trop_model_tbl, iono_model_tbl, default_config
 from cssrlib.ppp import tidedisp, tidedispIERS2010, shapiro, windupcorr, sunmoonpos
 from cssrlib.peph import antModelRx, antModelTx
@@ -153,6 +153,9 @@ class pppos():
                 config['nav']['elmaskar']*rCST.D2R  # elevation mask for AR
         if 'elmin' in config['nav']:
             self.nav.elmin = config['nav']['elmin']*rCST.D2R
+
+        if 'excl_sat' in config['nav']:
+            self.nav.excl_sat = [id2sat(id) for id in config['nav']['excl_sat']]
 
         if 'parmode' in config['nav']:
             self.nav.parmode = config['nav']['parmode']  # 1: normal, 2: PAR

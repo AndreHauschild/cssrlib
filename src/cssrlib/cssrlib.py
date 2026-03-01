@@ -554,7 +554,7 @@ class cssr:
         else:
             dtow = bs.unpack_from('u12', msg, i)[0]
             i += 12
-            if self.tow >= 0:
+            if self.tow0 >= 0:
                 self.tow = self.tow0+dtow
         if self.week >= 0:
             self.time = gpst2time(self.week, self.tow)
@@ -882,25 +882,25 @@ class cssr:
         if self.iodssr != head['iodssr']:
             return -1
         self.flg_net = True
-        self.udi[sCType.STEC] = head['udi']
         dfm = bs.unpack_from_dict('u2u5u'+str(self.nsat_n),
                                   ['stype', 'inet', 'svmaskn'], msg, i)
-        inet = dfm['inet']
-        self.netmask[inet] = netmask = dfm['svmaskn']
-        self.lc[inet].sat_n = self.decode_local_sat(netmask)
-        self.lc[inet].nsat_n = nsat = len(self.lc[inet].sat_n)
         i += 7+self.nsat_n
+        inet = dfm['inet']
+        self.lc[inet].netmask = netmask = dfm['svmaskn']
+        self.lc[inet].sat_n = self.decode_local_sat(netmask)
+        self.lc[inet].nsat_n = len(self.lc[inet].sat_n)
         self.lc[inet].stec_quality = {}
+        self.udi[sCType.STEC] = head['udi']
+        self.lc[inet].flg_stec = 2 # stec functional term
         self.lc[inet].ci = {}
-        for k in range(nsat):
-            sat = self.lc[inet].sat_n[k]
-            v = bs.unpack_from_dict('u3u3', ['class', 'val'], msg, i)
-            self.lc[inet].stec_quality[sat] = self.quality_idx(v['class'],
-                                                               v['val'])
+        self.lc[inet].stype = {}
+        for sat in self.lc[inet].sat_n:
+            self.set_t0(inet, sat, sCType.STEC, self.time)
+            cls_, val = bs.unpack_from('u3u3', msg, i)
             i += 6
+            self.lc[inet].stec_quality[sat] = self.quality_idx(cls_, val)
             ci, i = self.decode_cssr_stec_coeff(msg, dfm['stype'], i)
             self.lc[inet].ci[sat] = ci
-            self.set_t0(inet, sat, sCType.STEC, self.time)
 
         self.lc[inet].cstat |= (1 << sCType.STEC)
 
@@ -914,36 +914,57 @@ class cssr:
         dfm = bs.unpack_from_dict('u2u1u5u'+str(self.nsat_n)+'u3u3u6',
                                   ['ttype', 'range', 'inet', 'svmaskn',
                                   'class', 'value', 'ng'], msg, i)
+        i += 20+self.nsat_n
+        
         self.flg_net = True
         self.udi[sCType.TROP] = head['udi']
         inet = dfm['inet']
-        self.netmask[inet] = netmask = dfm['svmaskn']
+        self.lc[inet].netmask = netmask = dfm['svmaskn']
         self.lc[inet].sat_n = self.decode_local_sat(netmask)
         self.lc[inet].nsat_n = nsat = len(self.lc[inet].sat_n)
         ng = dfm['ng']
         self.lc[inet].ng = ng
         self.lc[inet].trop_quality = self.quality_idx(dfm['class'],
                                                       dfm['value'])
-        i += 20+self.nsat_n
-        sz = 7 if dfm['range'] == 0 else 16
-        fmt = 's'+str(sz)
-        self.lc[inet].stec = np.zeros(ng, dtype=list)
+
+        self.udi[sCType.TROP] = head['udi']
+        
+        grid = self.grid[self.grid['nid'] == inet]
+        if len(grid)>0:
+            ah, aw = mapfParam(self.time, grid['lat'][0])
+            self.lc[inet].maph = ah
+            self.lc[inet].mapw = aw
+
         self.lc[inet].dth = np.zeros(ng)
         self.lc[inet].dtw = np.zeros(ng)
 
+        self.lc[inet].ct = np.zeros((2, 4))
+        self.lc[inet].ct[0, 0] = 2.3
+        self.lc[inet].ct[1, 0] = 0.252
+
+        sz = 7 if dfm['range'] == 0 else 16
+        fmt = 's'+str(sz)
+        self.lc[inet].dstec = {}
+        self.lc[inet].s_sz = {}
+        
+        for sat in self.lc[inet].sat_n:
+            self.lc[inet].dstec[sat] = {}
+            self.lc[inet].s_sz[sat] = sz
+
+        self.lc[inet].flg_trop = 3 if dfm['ttype'] > 0 else 0
+
         for j in range(ng):
-            self.lc[inet].stec[j] = {}
             if dfm['ttype'] > 0:
                 dth, dtw = bs.unpack_from('s9s8', msg, i)
                 i += 17
-                self.lc[inet].dth[j] = self.sval(dth, 9, 0.004)+2.3
+                self.lc[inet].dth[j] = self.sval(dth, 9, 0.004)                
                 self.lc[inet].dtw[j] = self.sval(dtw, 8, 0.004)
-
-            for k in range(nsat):
-                sat = self.lc[inet].sat_n[k]
+                
+            for sat in self.lc[inet].sat_n:
                 dstec = bs.unpack_from(fmt, msg, i)[0]
                 i += sz
-                self.lc[inet].stec[j][sat] = self.sval(dstec, sz, 0.04)
+                self.lc[inet].dstec[sat][j] = self.sval(dstec, sz, 0.04)
+
         self.lc[inet].cstat |= (1 << sCType.TROP)
         for k in range(nsat):
             self.set_t0(inet, self.lc[inet].sat_n[k], sCType.TROP, self.time)
@@ -1108,8 +1129,8 @@ class cssr:
             if dfm['stec'] & 1 > 0:  # residual term
                 sz_idx = bs.unpack_from('u2', msg, i)[0]
                 i += 2
-                self.lc[inet].s_sz[sat] = sz_idx
                 sz = self.stec_sz_t[sz_idx]
+                self.lc[inet].s_sz[sat] = sz
                 scl = self.stec_scl_t[sz_idx]
                 v = bs.unpack_from(('s'+str(sz))*ng, msg, i)
                 i += sz*ng
@@ -1163,7 +1184,7 @@ class cssr:
                 return 0
             if self.monlevel >= 2:
                 if self.flg_net:
-                    print("tow={:6d} subtype={:2d} inet={:2d}".
+                    print("tow={:6.1f} subtype={:2d} inet={:2d}".
                           format(self.tow, self.subtype, self.inet))
                 else:
                     print("tow={:6.0f} subtype={:2d}".format(self.tow,
@@ -1200,7 +1221,7 @@ class cssr:
         if self.time == -1:
             return
 
-        self.fh.write("{:4d}\t{:s}\n".format(self.msgtype,
+        self.fh.write("{:4d}/{:2d}\t{:s}\n".format(self.msgtype,self.subtype,
                                              time2str(self.time)))
         if (self.lc[0].cstat & (1 << sCType.MASK)) != (1 << sCType.MASK):
             return
