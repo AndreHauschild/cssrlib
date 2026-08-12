@@ -214,7 +214,7 @@ def eph2pos(t: gtime_t, eph: Eph, flg_v=False):
         qq = np.array([si*sOmg, -si*cOmg, ci])
         Ed = n/nue
         nud = np.sqrt(1.0-eph.e**2)/nue*Ed
-        h2d = 2.0*nud*np.array([-h[1], h[0]])
+        h2d = 2.0*nud*np.array([-h2[1], h2[0]])
         ud = nud+np.array([eph.cuc, eph.cus])@h2d
         rd = Ak*eph.e*sE*Ed+np.array([eph.crc, eph.crs])@h2d
 
